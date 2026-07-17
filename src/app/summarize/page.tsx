@@ -91,7 +91,7 @@ export default function SummarizePage() {
         <div>
           <h1 className="section-title">영상 요약</h1>
           <p className="section-desc">
-            유튜브 URL을 입력하면 자막을 바탕으로 NotebookLM처럼 정리합니다.
+            유튜브 URL을 입력하면 자막을 바탕으로 핵심 내용을 구조적으로 정리합니다.
             요약 후 사건·원인·해결책&훈육으로 분리할 수 있습니다.
           </p>
         </div>

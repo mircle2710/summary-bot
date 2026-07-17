@@ -25,7 +25,7 @@ export async function summarizeTranscript(params: {
     messages: [
       {
         role: "system",
-        content: `당신은 NotebookLM처럼 영상 내용을 명확하고 구조적으로 정리하는 한국어 요약 전문가입니다.
+        content: `당신은 영상 내용을 명확하고 구조적으로 정리하는 한국어 요약 전문가입니다.
 반드시 JSON으로만 답하세요.
 형식:
 {
