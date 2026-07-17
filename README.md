@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 요약봇
 
-## Getting Started
+유튜브 채널 정보를 관리하고, 영상 URL을 NotebookLM처럼 요약한 뒤 **사건 / 원인 / 해결책&훈육**으로 분리 정리하는 웹앱입니다.
 
-First, run the development server:
+## 기능
+
+1. **채널 관리** — 채널 추가, 구독자·조회수·영상 수, 소개, 연도별 업로드 수, 최신 영상
+2. **영상 요약** — 유튜브 URL 입력 → 자막 기반 구조화 요약
+3. **분리 정리** — 요약 후 사건 / 원인 / 해결책&훈육 버튼으로 관점별 재정리
+
+## 로컬 실행
 
 ```bash
+cp .env.example .env.local
+# .env.local에 YOUTUBE_API_KEY, OPENAI_API_KEY 입력
+
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+http://localhost:3000 에서 확인합니다.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 환경 변수
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| 변수 | 설명 |
+|------|------|
+| `YOUTUBE_API_KEY` | YouTube Data API v3 키 |
+| `OPENAI_API_KEY` | OpenAI API 키 |
+| `OPENAI_MODEL` | 기본값 `gpt-4o-mini` |
 
-## Learn More
+## Vercel 배포
 
-To learn more about Next.js, take a look at the following resources:
+1. GitHub에 푸시
+2. [Vercel](https://vercel.com)에서 Import
+3. Environment Variables에 위 키 등록
+4. Deploy
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 참고
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 채널 목록은 브라우저 `localStorage`에 저장됩니다.
+- 요약은 영상의 자막(캡션)이 있어야 동작합니다.
