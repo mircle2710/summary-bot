@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { summarizeTranscript } from "@/lib/ai";
-import { getOpenAIApiKey, getYoutubeApiKey } from "@/lib/request-keys";
+import { getGeminiApiKey, getYoutubeApiKey } from "@/lib/request-keys";
 import { buildMetadataTranscript, fetchTranscript } from "@/lib/transcript";
 import { extractVideoId, getVideoMeta } from "@/lib/youtube";
 
 export async function POST(request: Request) {
   try {
     const youtubeApiKey = getYoutubeApiKey(request);
-    const openaiApiKey = getOpenAIApiKey(request);
+    const geminiApiKey = getGeminiApiKey(request);
     const body = (await request.json()) as { url?: string };
     if (!body.url?.trim()) {
       return NextResponse.json({ error: "유튜브 URL을 입력해 주세요." }, { status: 400 });
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       description: meta.description,
       transcript,
       source,
-      apiKey: openaiApiKey,
+      apiKey: geminiApiKey,
     });
 
     return NextResponse.json({

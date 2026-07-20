@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { analyzeSummary } from "@/lib/ai";
-import { getOpenAIApiKey } from "@/lib/request-keys";
+import { getGeminiApiKey } from "@/lib/request-keys";
 import type { AnalysisType } from "@/lib/types";
 
 const VALID: AnalysisType[] = ["incident", "cause", "solution"];
 
 export async function POST(request: Request) {
   try {
-    const openaiApiKey = getOpenAIApiKey(request);
+    const geminiApiKey = getGeminiApiKey(request);
     const body = (await request.json()) as {
       type?: AnalysisType;
       title?: string;
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
       summary: body.summary,
       keyPoints: body.keyPoints || [],
       transcript: body.transcript,
-      apiKey: openaiApiKey,
+      apiKey: geminiApiKey,
     });
 
     return NextResponse.json({ result });

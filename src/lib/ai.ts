@@ -1,14 +1,31 @@
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { AnalysisType } from "./types";
 
-function getClient(apiKey?: string) {
-  const key = apiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
+function getModel(apiKey?: string) {
+  const key = apiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
   if (!key) {
     throw new Error(
-      "OpenAI API 키가 없습니다. 설정에서 키를 입력하거나 서버 환경 변수를 설정해 주세요.",
+      "Gemini API 키가 없습니다. 설정에서 키를 입력하거나 서버 환경 변수를 설정해 주세요.",
     );
   }
-  return new OpenAI({ apiKey: key });
+  const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const genAI = new GoogleGenerativeAI(key);
+  return genAI.getGenerativeModel({
+    model: modelName,
+    generationConfig: {
+      temperature: 0.3,
+      responseMimeType: "application/json",
+    },
+  });
+}
+
+function parseJson<T>(raw: string): T {
+  const cleaned = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  return JSON.parse(cleaned) as T;
 }
 
 export async function summarizeTranscript(params: {
@@ -19,8 +36,7 @@ export async function summarizeTranscript(params: {
   source?: "caption" | "metadata";
   apiKey?: string;
 }) {
-  const client = getClient(params.apiKey);
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const model = getModel(params.apiKey);
   const source = params.source || "caption";
 
   const sourceRule =
@@ -30,14 +46,7 @@ export async function summarizeTranscript(params: {
 - 요약 첫머리에 "자막이 없어 제목·설명 기준으로 정리했습니다."를 한 문장 포함하세요.`
       : `- 자막을 기준으로 내용을 정리하세요.`;
 
-  const response = await client.chat.completions.create({
-    model,
-    temperature: 0.3,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: `당신은 영상 내용을 명확하고 구조적으로 정리하는 한국어 요약 전문가입니다.
+  const prompt = `당신은 영상 내용을 명확하고 구조적으로 정리하는 한국어 요약 전문가입니다.
 반드시 JSON으로만 답하세요.
 형식:
 {
@@ -49,23 +58,19 @@ export async function summarizeTranscript(params: {
 - 교육/양육/훈육 관련 내용이면 실천 관점으로 정리
 - 불필요한 수사나 이모지 금지
 - 한국어로 작성
-${sourceRule}`,
-      },
-      {
-        role: "user",
-        content: `영상 제목: ${params.title}
+${sourceRule}
+
+영상 제목: ${params.title}
 채널: ${params.channelTitle}
 설명:
 ${params.description.slice(0, 4000)}
 
 ${source === "caption" ? "자막/트랜스크립트:" : "제목·설명 기반 원문:"}
-${params.transcript.slice(0, 50000)}`,
-      },
-    ],
-  });
+${params.transcript.slice(0, 50000)}`;
 
-  const raw = response.choices[0]?.message?.content || "{}";
-  const parsed = JSON.parse(raw) as { summary?: string; keyPoints?: string[] };
+  const result = await model.generateContent(prompt);
+  const raw = result.response.text() || "{}";
+  const parsed = parseJson<{ summary?: string; keyPoints?: string[] }>(raw);
   return {
     summary: parsed.summary || "",
     keyPoints: parsed.keyPoints || [],
@@ -116,24 +121,14 @@ export async function analyzeSummary(params: {
   transcript?: string;
   apiKey?: string;
 }) {
-  const client = getClient(params.apiKey);
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-  const prompt = ANALYSIS_PROMPTS[params.type];
+  const model = getModel(params.apiKey);
+  const promptInfo = ANALYSIS_PROMPTS[params.type];
 
-  const response = await client.chat.completions.create({
-    model,
-    temperature: 0.2,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: `당신은 교육/양육 영상 내용을 분석하는 한국어 전문가입니다.
-${prompt.instruction}
-반드시 JSON만 반환하고, 한국어로 작성하세요.`,
-      },
-      {
-        role: "user",
-        content: `영상 제목: ${params.title}
+  const prompt = `당신은 교육/양육 영상 내용을 분석하는 한국어 전문가입니다.
+${promptInfo.instruction}
+반드시 JSON만 반환하고, 한국어로 작성하세요.
+
+영상 제목: ${params.title}
 
 요약:
 ${params.summary}
@@ -141,16 +136,14 @@ ${params.summary}
 핵심 포인트:
 ${params.keyPoints.map((p) => `- ${p}`).join("\n")}
 
-${params.transcript ? `참고 자막(일부):\n${params.transcript.slice(0, 20000)}` : ""}`,
-      },
-    ],
-  });
+${params.transcript ? `참고 자막(일부):\n${params.transcript.slice(0, 20000)}` : ""}`;
 
-  const raw = response.choices[0]?.message?.content || "{}";
-  const parsed = JSON.parse(raw) as { content?: string; items?: string[] };
+  const result = await model.generateContent(prompt);
+  const raw = result.response.text() || "{}";
+  const parsed = parseJson<{ content?: string; items?: string[] }>(raw);
   return {
     type: params.type,
-    title: prompt.title,
+    title: promptInfo.title,
     content: parsed.content || "",
     items: parsed.items || [],
   };

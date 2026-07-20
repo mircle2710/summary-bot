@@ -5,14 +5,14 @@
 ## 기능
 
 1. **채널 관리** — 채널 추가, 구독자·조회수·영상 수, 소개, 연도별 업로드 수, 최신 영상
-2. **영상 요약** — 유튜브 URL 입력 → 자막 기반 구조화 요약
+2. **영상 요약** — 유튜브 URL 입력 → 자막 기반 구조화 요약 (없으면 제목·설명)
 3. **분리 정리** — 요약 후 사건 / 원인 / 해결책&훈육 버튼으로 관점별 재정리
 
 ## 로컬 실행
 
 ```bash
 cp .env.example .env.local
-# .env.local에 YOUTUBE_API_KEY, OPENAI_API_KEY 입력
+# .env.local에 YOUTUBE_API_KEY, GEMINI_API_KEY 입력
 
 npm install
 npm run dev
@@ -25,8 +25,8 @@ http://localhost:3000 에서 확인합니다.
 | 변수 | 설명 |
 |------|------|
 | `YOUTUBE_API_KEY` | YouTube Data API v3 키 |
-| `OPENAI_API_KEY` | OpenAI API 키 |
-| `OPENAI_MODEL` | 기본값 `gpt-4o-mini` |
+| `GEMINI_API_KEY` | Google AI Studio Gemini API 키 |
+| `GEMINI_MODEL` | 기본값 `gemini-2.0-flash` |
 
 ## Vercel 배포
 
@@ -37,7 +37,6 @@ http://localhost:3000 에서 확인합니다.
 
 ## 참고
 
-- 우측 상단 **설정**에서 YouTube / OpenAI API 키를 입력할 수 있습니다. 키는 브라우저 `localStorage`에만 저장됩니다.
+- 우측 상단 **설정**에서 YouTube / Gemini API 키를 입력할 수 있습니다. 키는 브라우저 `localStorage`에만 저장됩니다.
 - 채널 목록도 브라우저 `localStorage`에 저장됩니다.
-- 요약은 영상의 자막(캡션)이 있어야 동작합니다.
-- 설정 키가 없으면 서버 환경 변수(`YOUTUBE_API_KEY`, `OPENAI_API_KEY`)를 사용합니다.
+- 설정 키가 없으면 서버 환경 변수(`YOUTUBE_API_KEY`, `GEMINI_API_KEY`)를 사용합니다.

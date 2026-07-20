@@ -7,8 +7,8 @@ export async function apiFetch(input: string, init: RequestInit = {}) {
   if (settings.youtubeApiKey) {
     headers.set(API_HEADER.youtube, settings.youtubeApiKey);
   }
-  if (settings.openaiApiKey) {
-    headers.set(API_HEADER.openai, settings.openaiApiKey);
+  if (settings.geminiApiKey) {
+    headers.set(API_HEADER.gemini, settings.geminiApiKey);
   }
 
   return fetch(input, {

@@ -16,7 +16,7 @@ type SettingsModalProps = {
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<ApiSettings>({
     youtubeApiKey: "",
-    openaiApiKey: "",
+    geminiApiKey: "",
   });
   const [saved, setSaved] = useState(false);
 
@@ -45,7 +45,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   function handleClear() {
     clearApiSettings();
-    setSettings({ youtubeApiKey: "", openaiApiKey: "" });
+    setSettings({ youtubeApiKey: "", geminiApiKey: "" });
     setSaved(false);
   }
 
@@ -86,16 +86,16 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           </label>
 
           <label className="field">
-            <span>OpenAI API 키</span>
+            <span>Gemini API 키</span>
             <input
               className="input"
               type="password"
               autoComplete="off"
-              value={settings.openaiApiKey}
+              value={settings.geminiApiKey}
               onChange={(e) =>
-                setSettings((prev) => ({ ...prev, openaiApiKey: e.target.value }))
+                setSettings((prev) => ({ ...prev, geminiApiKey: e.target.value }))
               }
-              placeholder="sk-..."
+              placeholder="AIza... 또는 Google AI Studio 키"
             />
           </label>
 
