@@ -6,6 +6,8 @@ import type {
 } from "./types";
 import { PET_PROBLEM_FRAMEWORK } from "./types";
 import type { VertexCredentials } from "./request-keys";
+import type { ImageDensity, ImageStyleId, ShortsTopic } from "./shorts";
+import { IMAGE_STYLE_OPTIONS } from "./shorts";
 
 const FALLBACK_MODELS = [
   process.env.VERTEX_MODEL,
@@ -362,36 +364,23 @@ export async function summarizeTranscript(params: {
       : `- 자막을 기준으로 정리.`;
 
   const prompt = `한국어 요약·숏츠 기획 전문가. 완전한 JSON 객체만 반환.
-이 결과는 유튜브 숏츠 피드를 만들기 위한 재료입니다.
 
 형식:
 {
-  "summary":"2~4문단 문자열",
+  "summary":"2~4문단",
   "keyPoints":["핵심1","핵심2","핵심3","핵심4","핵심5"],
   "genreHint":"장르 한 줄",
-  "usePetFramework": false,
-  "primaryFramework":{
-    "id":"shorts-breed",
-    "label":"매력 · 특징 · 주의점",
-    "parts":[
-      {"key":"hook","title":"매력 훅"},
-      {"key":"core","title":"핵심 특징"},
-      {"key":"payoff","title":"키울 때 주의점"}
-    ]
-  },
-  "frameworks":[
-    {"id":"alt-1","label":"대안 라벨","parts":[{"key":"a","title":"파트1"},{"key":"b","title":"파트2"},{"key":"c","title":"파트3"}]}
+  "shortsTopics":[
+    {"id":"t1","title":"숏츠 주제 제목","angle":"왜 이 주제가 숏츠로 좋은지 한 줄"},
+    {"id":"t2","title":"...","angle":"..."},
+    {"id":"t3","title":"...","angle":"..."}
   ]
 }
 
 규칙:
-- 사실 왜곡 금지, 이모지 금지, JSON 문자열을 중간에 자르지 말 것
-- usePetFramework=true 는 "문제 상황 → 원인 → 해결/훈육"이 주된 서사일 때만
-- 백과/정보/리뷰/브이로그/요리 등 설명형이면 usePetFramework=false
-- usePetFramework=true 이면 primaryFramework id는 "pet-problem", parts는 사건/원인/해결책 & 훈육
-- usePetFramework=false 이면 primaryFramework는 숏츠용 3파트 (이 영상으로 숏츠를 만든다면 무엇을 뽑을지)
-- frameworks에는 primary 외 대안 0~1개만
-- summary/keyPoints만 작성. sections 필드는 넣지 말 것
+- 사실 왜곡 금지, 이모지 금지, JSON을 중간에 자르지 말 것
+- shortsTopics는 요약 내용을 바탕으로 숏츠 피드로 만들기 좋은 주제 3~5개
+- 각 주제는 클릭베이트가 아닌, 실제로 뽑아낼 수 있는 구체적 각도
 ${sourceRule}
 
 제목: ${params.title}
@@ -412,57 +401,164 @@ ${params.transcript.slice(0, 6000)}`;
     summary?: string;
     keyPoints?: string[];
     genreHint?: string;
-    usePetFramework?: boolean;
-    primaryFramework?: unknown;
-    frameworks?: unknown;
+    shortsTopics?: unknown;
   }>(raw);
-
-  const usePet = Boolean(parsed.usePetFramework);
-  const fallbackShorts: Framework = {
-    id: "shorts-default",
-    label: "훅 · 핵심 · 여운",
-    parts: [
-      { key: "hook", title: "훅" },
-      { key: "core", title: "핵심" },
-      { key: "payoff", title: "여운" },
-    ],
-  };
-  const primary =
-    (usePet
-      ? PET_PROBLEM_FRAMEWORK
-      : normalizeFramework(parsed.primaryFramework)) ||
-    (usePet ? PET_PROBLEM_FRAMEWORK : fallbackShorts);
-  const frameworks = normalizeFrameworkList(parsed.frameworks, primary);
-
-  // Fill sections in a second, smaller JSON call for reliability
-  let sections: AnalysisSection[] = primary.parts.map((part) => ({
-    key: part.key,
-    title: part.title,
-    content: "",
-    items: [],
-  }));
-  try {
-    const filled = await analyzeByFramework({
-      framework: primary,
-      title: params.title,
-      summary: parsed.summary || "",
-      keyPoints: parsed.keyPoints || [],
-      transcript: params.transcript,
-      credentials: params.credentials,
-    });
-    sections = filled.sections;
-  } catch {
-    // Keep empty section shells; UI still shows summary
-  }
 
   return {
     summary: parsed.summary || "",
     keyPoints: parsed.keyPoints || [],
     genreHint: parsed.genreHint?.trim() || "",
-    frameworks,
-    sections,
-    activeFrameworkId: primary.id,
+    shortsTopics: normalizeTopics(parsed.shortsTopics),
   };
+}
+
+function normalizeTopics(raw: unknown): ShortsTopic[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as { id?: string; title?: string; angle?: string };
+      const title = row.title?.trim();
+      if (!title) return null;
+      return {
+        id: row.id?.trim() || `topic-${index + 1}`,
+        title,
+        angle: row.angle?.trim() || "",
+      };
+    })
+    .filter((t): t is ShortsTopic => Boolean(t))
+    .slice(0, 5);
+}
+
+export async function suggestShortsTopics(params: {
+  title: string;
+  summary: string;
+  keyPoints: string[];
+  customPrompt?: string;
+  credentials: VertexCredentials;
+}): Promise<ShortsTopic[]> {
+  const custom = params.customPrompt?.trim();
+  const prompt = `한국어 숏츠 기획. 완전한 JSON만 반환.
+형식: {"shortsTopics":[{"id":"t1","title":"주제","angle":"한 줄 설명"}]}
+규칙: 주제 3~5개, 이모지 금지, 요약 기반.
+${custom ? `사용자 추가 요청:\n${custom.slice(0, 800)}` : ""}
+
+제목: ${params.title}
+요약:
+${params.summary.slice(0, 2500)}
+핵심:
+${params.keyPoints
+  .slice(0, 8)
+  .map((p) => `- ${p}`)
+  .join("\n")}`;
+
+  const raw = await generateJson({
+    credentials: params.credentials,
+    temperature: 0.35,
+    prompt,
+    maxOutputTokens: 2048,
+  });
+  const parsed = parseJson<{ shortsTopics?: unknown }>(raw);
+  return normalizeTopics(parsed.shortsTopics);
+}
+
+export async function buildShortsScript(params: {
+  title: string;
+  summary: string;
+  keyPoints: string[];
+  topicTitle?: string;
+  topicAngle?: string;
+  customPrompt?: string;
+  density: ImageDensity;
+  style: ImageStyleId;
+  credentials: VertexCredentials;
+}): Promise<{
+  sentences: string[];
+  scenes: Array<{ id: string; text: string; imagePrompt: string }>;
+}> {
+  const styleHint =
+    IMAGE_STYLE_OPTIONS.find((s) => s.id === params.style)?.promptHint || "";
+  const focus =
+    params.customPrompt?.trim() ||
+    [params.topicTitle, params.topicAngle].filter(Boolean).join(" — ");
+
+  const prompt = `한국어 숏츠 대본 작가. 완전한 JSON만 반환.
+목표: 세로 숏츠 피드용 문장과 장면별 이미지 프롬프트.
+
+형식:
+{
+  "sentences":["숏츠 자막용 짧은 문장1","문장2"],
+  "scenes":[
+    {"id":"s1","text":"이 장면에 들어갈 문장(들)","imagePrompt":"English visual prompt for the image"}
+  ]
+}
+
+규칙:
+- sentences는 8~16개, 각 문장은 숏츠 자막으로 읽기 좋게 짧게
+- density=${params.density} → 문장 ${params.density}개당 이미지 장면 1개 (scenes 수 ≈ ceil(sentences/${params.density}))
+- scenes[].text는 해당 장면에 묶인 문장들을 공백으로 이어 붙인 한글
+- scenes[].imagePrompt는 영어, 스타일 힌트 반영, 텍스트/자막/워터마크/로고 넣지 말 것
+- 스타일 힌트: ${styleHint}
+- 이모지 금지, JSON 잘림 금지
+포커스 주제/요청: ${focus || "(요약 전체에서 가장 숏츠감 있는 각도)"}
+
+제목: ${params.title}
+요약:
+${params.summary.slice(0, 2500)}
+핵심:
+${params.keyPoints
+  .slice(0, 8)
+  .map((p) => `- ${p}`)
+  .join("\n")}`;
+
+  const raw = await generateJson({
+    credentials: params.credentials,
+    temperature: 0.3,
+    prompt,
+    maxOutputTokens: 4096,
+  });
+  const parsed = parseJson<{
+    sentences?: unknown;
+    scenes?: unknown;
+  }>(raw);
+
+  const sentences = Array.isArray(parsed.sentences)
+    ? parsed.sentences
+        .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+        .map((s) => s.trim())
+        .slice(0, 24)
+    : [];
+
+  const scenesRaw = Array.isArray(parsed.scenes) ? parsed.scenes : [];
+  let scenes = scenesRaw
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as { id?: string; text?: string; imagePrompt?: string };
+      const text = row.text?.trim();
+      const imagePrompt = row.imagePrompt?.trim();
+      if (!text || !imagePrompt) return null;
+      return {
+        id: row.id?.trim() || `scene-${index + 1}`,
+        text,
+        imagePrompt,
+      };
+    })
+    .filter((s): s is { id: string; text: string; imagePrompt: string } => Boolean(s));
+
+  // Fallback: pack sentences by density if scenes missing
+  if (scenes.length === 0 && sentences.length > 0) {
+    scenes = [];
+    for (let i = 0; i < sentences.length; i += params.density) {
+      const chunk = sentences.slice(i, i + params.density);
+      scenes.push({
+        id: `scene-${scenes.length + 1}`,
+        text: chunk.join(" "),
+        imagePrompt: `${styleHint}. Scene illustrating: ${chunk.join(" / ")}`,
+      });
+    }
+  }
+
+  return { sentences, scenes };
 }
 
 export async function analyzeByFramework(params: {

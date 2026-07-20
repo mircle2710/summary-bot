@@ -664,6 +664,85 @@ textarea {
   justify-self: start;
 }
 
+.shorts-step {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(35, 52, 40, 0.08);
+}
+
+.shorts-step h4 {
+  margin: 0 0 0.65rem;
+  font-family: var(--font-display);
+}
+
+.topic-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.topic-card {
+  display: grid;
+  gap: 0.35rem;
+  text-align: left;
+  padding: 0.85rem 0.95rem;
+  border-radius: 14px;
+  border: 1px solid rgba(35, 52, 40, 0.14);
+  background: #fff;
+  cursor: pointer;
+}
+
+.topic-card.active {
+  border-color: var(--leaf-deep);
+  background: rgba(35, 84, 58, 0.08);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+
+.subtitle-controls {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.sentence-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.scene-stack {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.85rem;
+}
+
+.scene-card {
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(35, 52, 40, 0.1);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.scene-head {
+  margin-bottom: 0.65rem;
+}
+
+.scene-image {
+  width: min(280px, 100%);
+  margin-top: 0.75rem;
+  border-radius: 12px;
+  display: block;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+}
+
 .prose-block {
   white-space: pre-wrap;
   line-height: 1.75;

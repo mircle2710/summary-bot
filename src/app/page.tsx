@@ -6,7 +6,7 @@ export default function HomePage() {
       <h1 className="hero-brand">요약봇</h1>
       <p className="hero-lead">
         관심 채널의 정보를 한곳에 모아 두고, 유튜브 영상을 요약한 뒤
-        숏츠로 뽑을 파트를 한 번에 나눠 보세요.
+        숏츠 피드 문장과 이미지를 만들어 보세요.
       </p>
       <div className="cta-row">
         <Link href="/channels" className="btn btn-primary">

@@ -63,6 +63,7 @@ export type SummaryResult = {
   videoUrl: string;
   source?: "caption" | "metadata";
   genreHint?: string;
+  shortsTopics?: import("./shorts").ShortsTopic[];
   frameworks?: Framework[];
   sections?: AnalysisSection[];
   activeFrameworkId?: string;
