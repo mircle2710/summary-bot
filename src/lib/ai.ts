@@ -1,10 +1,10 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { AnalysisType } from "./types";
 
 const FALLBACK_MODELS = [
   process.env.GEMINI_MODEL,
-  "gemini-2.0-flash-lite",
+  "gemini-2.5-flash",
   "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
 ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
 
 function resolveApiKey(apiKey?: string) {
@@ -26,41 +26,86 @@ function parseJson<T>(raw: string): T {
   return JSON.parse(cleaned) as T;
 }
 
+function extractQuotaMetric(message: string): string | null {
+  const match = message.match(/quotaMetric["']?\s*[:=]\s*["']?([a-zA-Z0-9_./-]+)/i);
+  return match?.[1] || null;
+}
+
 export function formatGeminiError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  const metric = extractQuotaMetric(message);
 
   if (/429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message)) {
-    if (/free_tier|free tier|무료/i.test(message)) {
-      return "이 API 키가 아직 무료 등급으로 인식되고 있습니다. 설정에서 My First Project(결제/Tier 1) 키인지 확인하고, 업그레이드 직후라면 1~2분 뒤 다시 시도해 주세요.";
+    if (/free_tier|FreeTier|generate_content_free_tier/i.test(message) || /free_tier/i.test(metric || "")) {
+      return [
+        "이 키는 아직 무료 한도(free_tier)로 인식되고 있습니다. (Tier 1로 보여도 API는 예전 키를 무료로 취급하는 경우가 많습니다.)",
+        "해결: Google Cloud Console → API 및 서비스 → 사용자 인증 정보에서 My First Project로 '새 API 키'를 만든 뒤, 설정에 그 새 키를 넣고 저장하세요.",
+        "업그레이드 전에 만든 AI Studio 키는 무료 한도에 남을 수 있습니다.",
+      ].join(" ");
     }
-    return "Gemini 요청 한도(분당/일일 제한)에 걸렸습니다. Tier 1도 요청 횟수 제한이 있습니다. 1~2분 기다린 뒤 한 번만 다시 시도해 주세요.";
+    return "Gemini 요청 한도(분당/일일)에 걸렸습니다. 1~2분 기다린 뒤 한 번만 다시 시도해 주세요.";
   }
   if (/401|403|API_KEY_INVALID|API key not valid/i.test(message)) {
     return "Gemini API 키가 올바르지 않습니다. 설정에서 키를 다시 확인해 주세요.";
   }
   if (/404|not found|is not found for API version/i.test(message)) {
-    return "사용할 수 있는 Gemini 모델을 찾지 못했습니다. GEMINI_MODEL 설정을 확인해 주세요.";
+    return "사용할 수 있는 Gemini 모델을 찾지 못했습니다. 설정에서 키를 저장한 뒤 다시 시도해 주세요.";
   }
 
   const short = message
     .replace(/\[GoogleGenerativeAI Error\]:\s*/i, "")
     .replace(/\s*\[\s*\{\s*"error"[\s\S]*$/, "")
     .trim();
-  return short.slice(0, 280) || "Gemini 요청에 실패했습니다.";
+  return short.slice(0, 320) || "Gemini 요청에 실패했습니다.";
 }
 
-function isRateLimitError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message);
-}
+type GeminiResponse = {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+  }>;
+  error?: {
+    code?: number;
+    message?: string;
+    status?: string;
+    details?: unknown;
+  };
+};
 
-function isModelNotFoundError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /404|not found|is not found for API version/i.test(message);
-}
+async function callGeminiOnce(params: {
+  apiKey: string;
+  model: string;
+  temperature: number;
+  prompt: string;
+}): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.model)}:generateContent?key=${encodeURIComponent(params.apiKey)}`;
 
-async function sleep(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: params.prompt }] }],
+      generationConfig: {
+        temperature: params.temperature,
+        responseMimeType: "application/json",
+        maxOutputTokens: 2048,
+      },
+    }),
+  });
+
+  const data = (await res.json()) as GeminiResponse;
+
+  if (!res.ok || data.error) {
+    const detail = data.error ? JSON.stringify(data.error) : await Promise.resolve("");
+    const message = data.error?.message || detail || `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+  if (!text.trim()) {
+    throw new Error("Gemini 응답이 비어 있습니다.");
+  }
+  return text;
 }
 
 async function generateJson(params: {
@@ -69,29 +114,56 @@ async function generateJson(params: {
   prompt: string;
 }) {
   const key = resolveApiKey(params.apiKey);
-  const genAI = new GoogleGenerativeAI(key);
   let lastError: unknown;
 
   for (const modelName of FALLBACK_MODELS) {
     try {
-      const model = genAI.getGenerativeModel({
+      return await callGeminiOnce({
+        apiKey: key,
         model: modelName,
-        generationConfig: {
-          temperature: params.temperature,
-          responseMimeType: "application/json",
-          maxOutputTokens: 2048,
-        },
+        temperature: params.temperature,
+        prompt: params.prompt,
       });
-      const result = await model.generateContent(params.prompt);
-      return result.response.text() || "{}";
     } catch (error) {
       lastError = error;
-      // 429면 다른 모델로 넘기지 않음 — 요청 1회만 소비
-      if (isRateLimitError(error)) {
+      const message = error instanceof Error ? error.message : String(error);
+      // 한도 초과면 다른 모델로 넘기지 않음 (요청 낭비 방지)
+      if (/429|Too Many Requests|quota|RESOURCE_EXHAUSTED|free_tier/i.test(message)) {
         throw new Error(formatGeminiError(error));
       }
-      // 모델 없음(404)일 때만 다음 모델 시도
-      if (!isModelNotFoundError(error)) {
+      // 모델 없음만 다음 후보로
+      if (!/404|not found|is not found for API version/i.test(message)) {
+        throw new Error(formatGeminiError(error));
+      }
+    }
+  }
+
+  throw new Error(formatGeminiError(lastError));
+}
+
+/** 키가 유료(Tier)로 동작하는지 아주 작은 요청으로 확인 */
+export async function pingGemini(apiKey?: string) {
+  const key = resolveApiKey(apiKey);
+  const models = FALLBACK_MODELS;
+  let lastError: unknown;
+
+  for (const model of models) {
+    try {
+      const raw = await callGeminiOnce({
+        apiKey: key,
+        model,
+        temperature: 0,
+        prompt: 'JSON만 답하세요: {"ok":true}',
+      });
+      parseJson<{ ok?: boolean }>(raw);
+      return { ok: true as const, model };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/429|quota|RESOURCE_EXHAUSTED|free_tier/i.test(message)) {
+        throw new Error(formatGeminiError(error));
+      }
+      if (!/404|not found/i.test(message)) {
         throw new Error(formatGeminiError(error));
       }
     }
@@ -112,32 +184,23 @@ export async function summarizeTranscript(params: {
 
   const sourceRule =
     source === "metadata"
-      ? `- 이 요청은 자막이 없어 제목과 영상 설명만으로 정리합니다.
-- 설명에 없는 내용을 지어내지 말고, 정보가 부족하면 그 사실을 명시하세요.
-- 요약 첫머리에 "자막이 없어 제목·설명 기준으로 정리했습니다."를 한 문장 포함하세요.`
-      : `- 자막을 기준으로 내용을 정리하세요.`;
+      ? `- 자막이 없어 제목·설명만 사용. 없는 내용은 지어내지 말 것.
+- 요약 첫머리에 "자막이 없어 제목·설명 기준으로 정리했습니다." 포함.`
+      : `- 자막을 기준으로 정리.`;
 
-  const prompt = `당신은 영상 내용을 명확하고 구조적으로 정리하는 한국어 요약 전문가입니다.
-반드시 JSON으로만 답하세요.
-형식:
-{
-  "summary": "전체 내용을 3~6문단으로 잘 정리한 요약 (마크다운 가능)",
-  "keyPoints": ["핵심 포인트 5~10개"]
-}
-규칙:
-- 원문의 사실과 맥락을 왜곡하지 말 것
-- 교육/양육/훈육 관련 내용이면 실천 관점으로 정리
-- 불필요한 수사나 이모지 금지
-- 한국어로 작성
+  // 토큰(한도) 소모 줄이기: 설명/자막을 짧게 자름
+  const prompt = `한국어 요약 전문가. JSON만 반환.
+형식: {"summary":"3~5문단","keyPoints":["5~8개"]}
+규칙: 사실 왜곡 금지, 훈육/양육이면 실천 중심으로, 이모지 금지
 ${sourceRule}
 
-영상 제목: ${params.title}
+제목: ${params.title}
 채널: ${params.channelTitle}
 설명:
-${params.description.slice(0, 2500)}
+${params.description.slice(0, 1200)}
 
-${source === "caption" ? "자막/트랜스크립트:" : "제목·설명 기반 원문:"}
-${params.transcript.slice(0, 18000)}`;
+${source === "caption" ? "자막:" : "원문:"}
+${params.transcript.slice(0, 8000)}`;
 
   const raw = await generateJson({
     apiKey: params.apiKey,
@@ -157,33 +220,18 @@ const ANALYSIS_PROMPTS: Record<
 > = {
   incident: {
     title: "사건",
-    instruction: `영상에서 다룬 '사건/상황/사례'를 분리 정리하세요.
-JSON 형식:
-{
-  "content": "사건 전체에 대한 개요 설명",
-  "items": ["사건/상황 항목들"]
-}
-무엇을 누가 어떤 상황에서 했는지를 중심으로 정리하세요.`,
+    instruction: `사건의 상황/사례를 분리.
+{"content":"개요","items":["항목들"]}`,
   },
   cause: {
     title: "원인",
-    instruction: `영상에서 제시된 사건의 '원인/배경/촉발 요인'을 분리 정리하세요.
-JSON 형식:
-{
-  "content": "원인에 대한 개요 설명",
-  "items": ["원인 항목들"]
-}
-표면적 원인과 깊은 원인을 구분해 정리하세요.`,
+    instruction: `원인/배경을 분리.
+{"content":"개요","items":["항목들"]}`,
   },
   solution: {
     title: "해결책 & 훈육",
-    instruction: `영상에서 제시된 '해결책/훈육법/실천 방법'을 분리 정리하세요.
-JSON 형식:
-{
-  "content": "해결책과 훈육에 대한 개요 설명",
-  "items": ["해결책 또는 훈육법 항목들"]
-}
-바로 적용 가능한 행동 지침 중심으로 정리하세요.`,
+    instruction: `해결책/훈육법을 분리.
+{"content":"개요","items":["항목들"]}`,
   },
 };
 
@@ -197,19 +245,18 @@ export async function analyzeSummary(params: {
 }) {
   const promptInfo = ANALYSIS_PROMPTS[params.type];
 
-  const prompt = `당신은 교육/양육 영상 내용을 분석하는 한국어 전문가입니다.
+  const prompt = `한국어 분석. JSON만 반환.
 ${promptInfo.instruction}
-반드시 JSON만 반환하고, 한국어로 작성하세요.
 
-영상 제목: ${params.title}
-
+제목: ${params.title}
 요약:
-${params.summary}
-
-핵심 포인트:
-${params.keyPoints.map((p) => `- ${p}`).join("\n")}
-
-${params.transcript ? `참고 자막(일부):\n${params.transcript.slice(0, 8000)}` : ""}`;
+${params.summary.slice(0, 2500)}
+핵심:
+${params.keyPoints
+  .slice(0, 8)
+  .map((p) => `- ${p}`)
+  .join("\n")}
+${params.transcript ? `참고:\n${params.transcript.slice(0, 3000)}` : ""}`;
 
   const raw = await generateJson({
     apiKey: params.apiKey,
