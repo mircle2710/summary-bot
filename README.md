@@ -26,7 +26,7 @@ http://localhost:3000 에서 확인합니다.
 |------|------|
 | `YOUTUBE_API_KEY` | YouTube Data API v3 키 |
 | `GEMINI_API_KEY` | Google AI Studio Gemini API 키 |
-| `GEMINI_MODEL` | 기본값 `gemini-2.0-flash` |
+| `GEMINI_MODEL` | 기본값 `gemini-2.0-flash-lite` |
 
 ## Vercel 배포
 

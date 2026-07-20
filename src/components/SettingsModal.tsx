@@ -13,6 +13,44 @@ type SettingsModalProps = {
   onClose: () => void;
 };
 
+function SecretField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <div className="secret-input-row">
+        <input
+          className="input"
+          type={visible ? "text" : "password"}
+          autoComplete="off"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+        <button
+          type="button"
+          className="btn btn-ghost secret-toggle"
+          onClick={() => setVisible((prev) => !prev)}
+          aria-label={visible ? "API 키 숨기기" : "API 키 보기"}
+        >
+          {visible ? "숨기기" : "보기"}
+        </button>
+      </div>
+    </label>
+  );
+}
+
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<ApiSettings>({
     youtubeApiKey: "",
@@ -71,33 +109,23 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         </p>
 
         <form onSubmit={handleSave} className="settings-form">
-          <label className="field">
-            <span>YouTube Data API 키</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="off"
-              value={settings.youtubeApiKey}
-              onChange={(e) =>
-                setSettings((prev) => ({ ...prev, youtubeApiKey: e.target.value }))
-              }
-              placeholder="AIza..."
-            />
-          </label>
+          <SecretField
+            label="YouTube Data API 키"
+            value={settings.youtubeApiKey}
+            onChange={(youtubeApiKey) =>
+              setSettings((prev) => ({ ...prev, youtubeApiKey }))
+            }
+            placeholder="AIza..."
+          />
 
-          <label className="field">
-            <span>Gemini API 키</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="off"
-              value={settings.geminiApiKey}
-              onChange={(e) =>
-                setSettings((prev) => ({ ...prev, geminiApiKey: e.target.value }))
-              }
-              placeholder="AIza... 또는 Google AI Studio 키"
-            />
-          </label>
+          <SecretField
+            label="Gemini API 키"
+            value={settings.geminiApiKey}
+            onChange={(geminiApiKey) =>
+              setSettings((prev) => ({ ...prev, geminiApiKey }))
+            }
+            placeholder="AIza... 또는 Google AI Studio 키"
+          />
 
           <div className="form-row" style={{ marginTop: "0.35rem" }}>
             <button type="submit" className="btn btn-primary">

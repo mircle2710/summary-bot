@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import type { AnalysisResult, AnalysisType, SummaryResult } from "@/lib/types";
 
@@ -18,6 +18,15 @@ const ANALYSIS_BUTTONS: { type: AnalysisType; label: string }[] = [
   { type: "solution", label: "해결책 & 훈육" },
 ];
 
+const PROGRESS_STEPS = [
+  { atMs: 0, percent: 8, label: "요청 준비 중…" },
+  { atMs: 700, percent: 22, label: "영상 정보 확인 중…" },
+  { atMs: 1800, percent: 45, label: "자막/설명 수집 중…" },
+  { atMs: 3200, percent: 68, label: "Gemini로 요약 중…" },
+  { atMs: 5200, percent: 86, label: "결과 정리 중…" },
+  { atMs: 8000, percent: 94, label: "거의 완료…" },
+];
+
 export default function SummarizePage() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -28,6 +37,49 @@ export default function SummarizePage() {
     {},
   );
   const [activeAnalysis, setActiveAnalysis] = useState<AnalysisType | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [progressLabel, setProgressLabel] = useState("");
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const timeoutIdsRef = useRef<number[]>([]);
+  const intervalIdRef = useRef<number | null>(null);
+
+  function clearProgressTimers() {
+    for (const id of timeoutIdsRef.current) window.clearTimeout(id);
+    timeoutIdsRef.current = [];
+    if (intervalIdRef.current !== null) {
+      window.clearInterval(intervalIdRef.current);
+      intervalIdRef.current = null;
+    }
+  }
+
+  function startProgress() {
+    clearProgressTimers();
+    setProgress(0);
+    setProgressLabel(PROGRESS_STEPS[0].label);
+    setElapsedSec(0);
+
+    for (const step of PROGRESS_STEPS) {
+      const id = window.setTimeout(() => {
+        setProgress(step.percent);
+        setProgressLabel(step.label);
+      }, step.atMs);
+      timeoutIdsRef.current.push(id);
+    }
+
+    intervalIdRef.current = window.setInterval(() => {
+      setElapsedSec((prev) => prev + 1);
+    }, 1000);
+  }
+
+  function finishProgress() {
+    clearProgressTimers();
+    setProgress(100);
+    setProgressLabel("완료");
+  }
+
+  useEffect(() => {
+    return () => clearProgressTimers();
+  }, []);
 
   async function handleSummarize(e: React.FormEvent) {
     e.preventDefault();
@@ -36,6 +88,7 @@ export default function SummarizePage() {
     setAnalyses({});
     setActiveAnalysis(null);
     setResult(null);
+    startProgress();
 
     try {
       const res = await apiFetch("/api/summarize", {
@@ -45,8 +98,12 @@ export default function SummarizePage() {
       });
       const data = (await res.json()) as SummarizeResponse;
       if (!res.ok) throw new Error(data.error || "요약에 실패했습니다.");
+      finishProgress();
       setResult(data);
     } catch (err) {
+      clearProgressTimers();
+      setProgress(0);
+      setProgressLabel("");
       setError(err instanceof Error ? err.message : "오류가 발생했습니다.");
     } finally {
       setLoading(false);
@@ -120,6 +177,22 @@ export default function SummarizePage() {
             )}
           </button>
         </div>
+
+        {(loading || progress === 100) && progressLabel && (
+          <div className="progress-panel" aria-live="polite">
+            <div className="progress-meta">
+              <span>{progressLabel}</span>
+              <strong>{progress}%</strong>
+            </div>
+            <div className="progress-track">
+              <div className="progress-fill" style={{ width: `${progress}%` }} />
+            </div>
+            {loading && (
+              <p className="muted progress-elapsed">경과 시간 {elapsedSec}초</p>
+            )}
+          </div>
+        )}
+
         {error && <div className="error-box">{error}</div>}
       </form>
 

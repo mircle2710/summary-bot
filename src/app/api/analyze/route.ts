@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
-import { analyzeSummary } from "@/lib/ai";
+import { analyzeSummary, formatGeminiError } from "@/lib/ai";
 import { getGeminiApiKey } from "@/lib/request-keys";
 import type { AnalysisType } from "@/lib/types";
 
 const VALID: AnalysisType[] = ["incident", "cause", "solution"];
+
+function statusFromMessage(message: string) {
+  if (/API 키/i.test(message)) return 401;
+  if (/쿼터/i.test(message)) return 429;
+  return 500;
+}
 
 export async function POST(request: Request) {
   try {
@@ -34,7 +40,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ result });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "분석에 실패했습니다.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = formatGeminiError(error);
+    return NextResponse.json({ error: message }, { status: statusFromMessage(message) });
   }
 }

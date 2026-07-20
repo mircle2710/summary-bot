@@ -1,22 +1,22 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { AnalysisType } from "./types";
 
-function getModel(apiKey?: string) {
+const FALLBACK_MODELS = [
+  process.env.GEMINI_MODEL,
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
+  "gemini-2.0-flash",
+].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+
+function resolveApiKey(apiKey?: string) {
   const key = apiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
   if (!key) {
     throw new Error(
       "Gemini API 키가 없습니다. 설정에서 키를 입력하거나 서버 환경 변수를 설정해 주세요.",
     );
   }
-  const modelName = process.env.GEMINI_MODEL || "gemini-2.0-flash";
-  const genAI = new GoogleGenerativeAI(key);
-  return genAI.getGenerativeModel({
-    model: modelName,
-    generationConfig: {
-      temperature: 0.3,
-      responseMimeType: "application/json",
-    },
-  });
+  return key;
 }
 
 function parseJson<T>(raw: string): T {
@@ -28,6 +28,65 @@ function parseJson<T>(raw: string): T {
   return JSON.parse(cleaned) as T;
 }
 
+export function formatGeminiError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (/429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message)) {
+    return "Gemini 무료 사용량(쿼터)을 초과했습니다. 잠시 후 다시 시도하거나, Google AI Studio에서 결제/할당량을 확인해 주세요.";
+  }
+  if (/401|403|API_KEY_INVALID|API key not valid/i.test(message)) {
+    return "Gemini API 키가 올바르지 않습니다. 설정에서 키를 다시 확인해 주세요.";
+  }
+  if (/404|not found|is not found for API version/i.test(message)) {
+    return "사용할 수 있는 Gemini 모델을 찾지 못했습니다. GEMINI_MODEL 설정을 확인해 주세요.";
+  }
+
+  const short = message
+    .replace(/\[GoogleGenerativeAI Error\]:\s*/i, "")
+    .replace(/\s*\[\s*\{\s*"error"[\s\S]*$/, "")
+    .trim();
+  return short.slice(0, 280) || "Gemini 요청에 실패했습니다.";
+}
+
+function isRetryableModelError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /429|Too Many Requests|quota|RESOURCE_EXHAUSTED|404|not found|is not found for API version/i.test(
+    message,
+  );
+}
+
+async function generateJson(params: {
+  apiKey?: string;
+  temperature: number;
+  prompt: string;
+}) {
+  const key = resolveApiKey(params.apiKey);
+  const genAI = new GoogleGenerativeAI(key);
+  let lastError: unknown;
+
+  for (const modelName of FALLBACK_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: params.temperature,
+          responseMimeType: "application/json",
+          maxOutputTokens: 2048,
+        },
+      });
+      const result = await model.generateContent(params.prompt);
+      return result.response.text() || "{}";
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableModelError(error)) {
+        throw new Error(formatGeminiError(error));
+      }
+    }
+  }
+
+  throw new Error(formatGeminiError(lastError));
+}
+
 export async function summarizeTranscript(params: {
   title: string;
   channelTitle: string;
@@ -36,7 +95,6 @@ export async function summarizeTranscript(params: {
   source?: "caption" | "metadata";
   apiKey?: string;
 }) {
-  const model = getModel(params.apiKey);
   const source = params.source || "caption";
 
   const sourceRule =
@@ -63,13 +121,16 @@ ${sourceRule}
 영상 제목: ${params.title}
 채널: ${params.channelTitle}
 설명:
-${params.description.slice(0, 4000)}
+${params.description.slice(0, 2500)}
 
 ${source === "caption" ? "자막/트랜스크립트:" : "제목·설명 기반 원문:"}
-${params.transcript.slice(0, 50000)}`;
+${params.transcript.slice(0, 18000)}`;
 
-  const result = await model.generateContent(prompt);
-  const raw = result.response.text() || "{}";
+  const raw = await generateJson({
+    apiKey: params.apiKey,
+    temperature: 0.3,
+    prompt,
+  });
   const parsed = parseJson<{ summary?: string; keyPoints?: string[] }>(raw);
   return {
     summary: parsed.summary || "",
@@ -121,7 +182,6 @@ export async function analyzeSummary(params: {
   transcript?: string;
   apiKey?: string;
 }) {
-  const model = getModel(params.apiKey);
   const promptInfo = ANALYSIS_PROMPTS[params.type];
 
   const prompt = `당신은 교육/양육 영상 내용을 분석하는 한국어 전문가입니다.
@@ -136,10 +196,13 @@ ${params.summary}
 핵심 포인트:
 ${params.keyPoints.map((p) => `- ${p}`).join("\n")}
 
-${params.transcript ? `참고 자막(일부):\n${params.transcript.slice(0, 20000)}` : ""}`;
+${params.transcript ? `참고 자막(일부):\n${params.transcript.slice(0, 8000)}` : ""}`;
 
-  const result = await model.generateContent(prompt);
-  const raw = result.response.text() || "{}";
+  const raw = await generateJson({
+    apiKey: params.apiKey,
+    temperature: 0.2,
+    prompt,
+  });
   const parsed = parseJson<{ content?: string; items?: string[] }>(raw);
   return {
     type: params.type,

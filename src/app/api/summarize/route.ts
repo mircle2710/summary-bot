@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
-import { summarizeTranscript } from "@/lib/ai";
+import { formatGeminiError, summarizeTranscript } from "@/lib/ai";
 import { getGeminiApiKey, getYoutubeApiKey } from "@/lib/request-keys";
 import { buildMetadataTranscript, fetchTranscript } from "@/lib/transcript";
 import { extractVideoId, getVideoMeta } from "@/lib/youtube";
+
+function statusFromMessage(message: string) {
+  if (/API 키/i.test(message)) return 401;
+  if (/쿼터/i.test(message)) return 429;
+  return 500;
+}
 
 export async function POST(request: Request) {
   try {
@@ -61,7 +67,7 @@ export async function POST(request: Request) {
       source,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "요약에 실패했습니다.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = formatGeminiError(error);
+    return NextResponse.json({ error: message }, { status: statusFromMessage(message) });
   }
 }
