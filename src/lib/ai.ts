@@ -1,5 +1,10 @@
 import { GoogleAuth, type JWTInput } from "google-auth-library";
-import type { AnalysisType } from "./types";
+import type {
+  AnalysisSection,
+  Framework,
+  FrameworkPart,
+} from "./types";
+import { PET_PROBLEM_FRAMEWORK } from "./types";
 import type { VertexCredentials } from "./request-keys";
 
 const FALLBACK_MODELS = [
@@ -179,6 +184,114 @@ export async function pingVertex(credentials: VertexCredentials) {
   throw new Error(formatVertexError(lastError));
 }
 
+function normalizeParts(parts: unknown): FrameworkPart[] {
+  if (!Array.isArray(parts)) return [];
+  return parts
+    .map((part, index) => {
+      if (!part || typeof part !== "object") return null;
+      const row = part as { key?: string; title?: string };
+      const title = row.title?.trim();
+      if (!title) return null;
+      const key =
+        row.key?.trim() ||
+        `part-${index + 1}-${title.toLowerCase().replace(/\s+/g, "-")}`;
+      return { key, title };
+    })
+    .filter((part): part is FrameworkPart => Boolean(part))
+    .slice(0, 3);
+}
+
+function normalizeFramework(raw: unknown): Framework | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as { id?: string; label?: string; parts?: unknown };
+  const parts = normalizeParts(row.parts);
+  if (parts.length !== 3) return null;
+  return {
+    id: row.id?.trim() || `framework-${parts.map((p) => p.key).join("-")}`,
+    label: row.label?.trim() || parts.map((p) => p.title).join(" · "),
+    parts,
+  };
+}
+
+function normalizeFrameworkList(raw: unknown, primary: Framework): Framework[] {
+  const byId = new Map<string, Framework>();
+  byId.set(primary.id, primary);
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const framework = normalizeFramework(item);
+      if (!framework || byId.has(framework.id)) continue;
+      byId.set(framework.id, framework);
+      if (byId.size >= 3) break;
+    }
+  }
+
+  // Keep pet framework available as an alternate when primary is Shorts-style.
+  if (primary.id !== PET_PROBLEM_FRAMEWORK.id && byId.size < 3) {
+    byId.set(PET_PROBLEM_FRAMEWORK.id, PET_PROBLEM_FRAMEWORK);
+  }
+
+  return Array.from(byId.values());
+}
+
+function normalizeSections(
+  raw: unknown,
+  framework: Framework,
+): AnalysisSection[] {
+  const byKey = new Map<string, AnalysisSection>();
+  const byTitle = new Map<string, AnalysisSection>();
+  const ordered: AnalysisSection[] = [];
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as {
+        key?: string;
+        title?: string;
+        content?: string;
+        items?: unknown;
+      };
+      const title = row.title?.trim() || "";
+      const key =
+        row.key?.trim() ||
+        (title
+          ? `part-${title.toLowerCase().replace(/\s+/g, "-")}`
+          : "");
+      if (!key && !title) continue;
+      const section: AnalysisSection = {
+        key: key || `part-${ordered.length + 1}`,
+        title: title || key,
+        content: row.content?.trim() || "",
+        items: Array.isArray(row.items)
+          ? row.items
+              .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+              .map((v) => v.trim())
+          : [],
+      };
+      ordered.push(section);
+      byKey.set(section.key, section);
+      byTitle.set(section.title, section);
+    }
+  }
+
+  if (framework.parts.length === 3) {
+    return framework.parts.map((part, index) => {
+      const found =
+        byKey.get(part.key) ||
+        byTitle.get(part.title) ||
+        ordered[index];
+      return {
+        key: part.key,
+        title: found?.title || part.title,
+        content: found?.content || "",
+        items: found?.items || [],
+      };
+    });
+  }
+
+  return ordered.slice(0, 3);
+}
+
 export async function summarizeTranscript(params: {
   title: string;
   channelTitle: string;
@@ -194,9 +307,42 @@ export async function summarizeTranscript(params: {
 - 요약 첫머리에 "자막이 없어 제목·설명 기준으로 정리했습니다." 포함.`
       : `- 자막을 기준으로 정리.`;
 
-  const prompt = `한국어 요약 전문가. JSON만 반환.
-형식: {"summary":"3~5문단","keyPoints":["5~8개"]}
-규칙: 사실 왜곡 금지, 훈육/양육이면 실천 중심으로, 이모지 금지
+  const prompt = `한국어 요약·숏츠 기획 전문가. JSON만 반환.
+이 결과는 유튜브 숏츠 피드를 만들기 위한 재료입니다.
+
+형식:
+{
+  "summary":"3~5문단",
+  "keyPoints":["5~8개"],
+  "genreHint":"장르 한 줄",
+  "usePetFramework": false,
+  "primaryFramework":{
+    "id":"shorts-...",
+    "label":"훅 · 핵심 · 여운",
+    "parts":[
+      {"key":"hook","title":"훅"},
+      {"key":"core","title":"핵심"},
+      {"key":"payoff","title":"여운"}
+    ]
+  },
+  "frameworks":[
+    {"id":"alt-1","label":"...","parts":[{"key":"a","title":"파트1"},{"key":"b","title":"파트2"},{"key":"c","title":"파트3"}]}
+  ],
+  "sections":[
+    {"key":"...","title":"...","content":"개요","items":["숏츠에 쓸 문장/장면"]}
+  ]
+}
+
+규칙:
+- 사실 왜곡 금지, 이모지 금지
+- usePetFramework=true 는 "문제 상황 → 원인 → 해결/훈육"이 영상의 주된 서사일 때만 (문제행동 교정, 훈련 갈등 해결 등)
+- 백과/정보/리뷰/브이로그/요리 등 설명형이면 usePetFramework=false
+- usePetFramework=true 이면 primaryFramework는 반드시 id="pet-problem", parts=사건/원인/해결책 & 훈육
+- usePetFramework=false 이면 primaryFramework는 숏츠용 3파트. "이 영상으로 숏츠를 만든다면 무엇을 뽑을지" 기준으로 파트명 정하기
+  예: 견종백과 → 한줄 매력 / 핵심 특징 / 키울 때 주의점
+  예: 요리 → 비주얼 훅 / 핵심 레시피 / 실패 방지 팁
+- sections는 primaryFramework의 3파트를 채울 것. items는 숏츠 대본/자막에 바로 쓸 짧은 문장 위주
+- frameworks에는 primary 외 대안 1개만 (숏츠 관점 또는 pet-problem 중 안 쓴 쪽)
 ${sourceRule}
 
 제목: ${params.title}
@@ -212,45 +358,81 @@ ${params.transcript.slice(0, 8000)}`;
     temperature: 0.3,
     prompt,
   });
-  const parsed = parseJson<{ summary?: string; keyPoints?: string[] }>(raw);
+  const parsed = parseJson<{
+    summary?: string;
+    keyPoints?: string[];
+    genreHint?: string;
+    usePetFramework?: boolean;
+    primaryFramework?: unknown;
+    frameworks?: unknown;
+    sections?: unknown;
+  }>(raw);
+
+  const usePet = Boolean(parsed.usePetFramework);
+  const fallbackShorts: Framework = {
+    id: "shorts-default",
+    label: "훅 · 핵심 · 여운",
+    parts: [
+      { key: "hook", title: "훅" },
+      { key: "core", title: "핵심" },
+      { key: "payoff", title: "여운" },
+    ],
+  };
+  const primary =
+    (usePet
+      ? PET_PROBLEM_FRAMEWORK
+      : normalizeFramework(parsed.primaryFramework)) ||
+    (usePet ? PET_PROBLEM_FRAMEWORK : fallbackShorts);
+  const frameworks = normalizeFrameworkList(parsed.frameworks, primary);
+  const sections = normalizeSections(parsed.sections, primary);
+
   return {
     summary: parsed.summary || "",
     keyPoints: parsed.keyPoints || [],
+    genreHint: parsed.genreHint?.trim() || "",
+    frameworks,
+    sections,
+    activeFrameworkId: primary.id,
   };
 }
 
-const ANALYSIS_PROMPTS: Record<
-  AnalysisType,
-  { title: string; instruction: string }
-> = {
-  incident: {
-    title: "사건",
-    instruction: `사건의 상황/사례를 분리.
-{"content":"개요","items":["항목들"]}`,
-  },
-  cause: {
-    title: "원인",
-    instruction: `원인/배경을 분리.
-{"content":"개요","items":["항목들"]}`,
-  },
-  solution: {
-    title: "해결책 & 훈육",
-    instruction: `해결책/훈육법을 분리.
-{"content":"개요","items":["항목들"]}`,
-  },
-};
-
-export async function analyzeSummary(params: {
-  type: AnalysisType;
+export async function analyzeByFramework(params: {
+  framework: Framework;
   title: string;
   summary: string;
   keyPoints: string[];
   transcript?: string;
   credentials: VertexCredentials;
 }) {
-  const promptInfo = ANALYSIS_PROMPTS[params.type];
-  const prompt = `한국어 분석. JSON만 반환.
-${promptInfo.instruction}
+  const parts = normalizeParts(params.framework.parts);
+  if (parts.length !== 3) {
+    throw new Error("프레임은 정확히 3개 파트가 필요합니다.");
+  }
+  const framework: Framework = {
+    id: params.framework.id?.trim() || "custom",
+    label:
+      params.framework.label?.trim() ||
+      parts.map((p) => p.title).join(" · "),
+    parts,
+  };
+
+  const partSpec = parts
+    .map((p, index) => `${index + 1}) key=${p.key}, title=${p.title}`)
+    .join("\n");
+
+  const prompt = `한국어 숏츠 기획 분석. JSON만 반환.
+주어진 3개 파트로 내용을 나눠, 숏츠 피드로 바로 쓸 재료를 정리하세요.
+형식:
+{
+  "sections":[
+    {"key":"...","title":"...","content":"개요","items":["짧은 숏츠용 문장"]}
+  ]
+}
+규칙: 사실 왜곡 금지, 이모지 금지, sections는 아래 3개 key/title을 모두 포함할 것. items는 숏츠 자막/대본에 쓸 짧은 문장.
+
+프레임: ${framework.label}
+파트 목록:
+${partSpec}
 
 제목: ${params.title}
 요약:
@@ -267,12 +449,84 @@ ${params.transcript ? `참고:\n${params.transcript.slice(0, 3000)}` : ""}`;
     temperature: 0.2,
     prompt,
   });
-  const parsed = parseJson<{ content?: string; items?: string[] }>(raw);
+  const parsed = parseJson<{ sections?: unknown }>(raw);
   return {
-    type: params.type,
-    title: promptInfo.title,
-    content: parsed.content || "",
-    items: parsed.items || [],
+    framework,
+    sections: normalizeSections(parsed.sections, framework),
+  };
+}
+
+export async function analyzeByCustomPrompt(params: {
+  customPrompt: string;
+  title: string;
+  summary: string;
+  keyPoints: string[];
+  transcript?: string;
+  credentials: VertexCredentials;
+}) {
+  const customPrompt = params.customPrompt.trim();
+  if (!customPrompt) {
+    throw new Error("프롬프트를 입력해 주세요.");
+  }
+
+  const prompt = `한국어 숏츠 기획 분석. JSON만 반환.
+사용자는 아래 요약으로 숏츠를 만들려 합니다. 사용자 요청에 맞게 3개 파트로 나눠 주세요.
+
+형식:
+{
+  "framework":{
+    "id":"custom",
+    "label":"프레임 라벨",
+    "parts":[
+      {"key":"a","title":"파트1"},
+      {"key":"b","title":"파트2"},
+      {"key":"c","title":"파트3"}
+    ]
+  },
+  "sections":[
+    {"key":"a","title":"파트1","content":"개요","items":["짧은 숏츠용 문장"]}
+  ]
+}
+규칙:
+- 사실 왜곡 금지, 이모지 금지
+- parts/sections는 정확히 3개
+- 숏츠로 뽑을 훅·핵심·여운/CTA 관점을 우선하되, 사용자 요청을 최우선 반영
+- items는 숏츠 자막/대본에 바로 쓸 짧은 문장
+
+사용자 요청:
+${customPrompt.slice(0, 1200)}
+
+제목: ${params.title}
+요약:
+${params.summary.slice(0, 2500)}
+핵심:
+${params.keyPoints
+  .slice(0, 8)
+  .map((p) => `- ${p}`)
+  .join("\n")}
+${params.transcript ? `참고:\n${params.transcript.slice(0, 3000)}` : ""}`;
+
+  const raw = await generateJson({
+    credentials: params.credentials,
+    temperature: 0.35,
+    prompt,
+  });
+  const parsed = parseJson<{ framework?: unknown; sections?: unknown }>(raw);
+  const framework =
+    normalizeFramework(parsed.framework) ||
+    ({
+      id: "custom",
+      label: "맞춤 정리",
+      parts: [
+        { key: "part-1", title: "파트 1" },
+        { key: "part-2", title: "파트 2" },
+        { key: "part-3", title: "파트 3" },
+      ],
+    } satisfies Framework);
+
+  return {
+    framework: { ...framework, id: framework.id || "custom" },
+    sections: normalizeSections(parsed.sections, framework),
   };
 }
 

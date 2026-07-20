@@ -88,6 +88,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState<string | null>(null);
   const [testOk, setTestOk] = useState<boolean | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -95,6 +96,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     setSaved(false);
     setTestMessage(null);
     setTestOk(null);
+    setFileError(null);
   }, [open]);
 
   useEffect(() => {
@@ -127,6 +129,35 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     setSaved(false);
     setTestMessage(null);
     setTestOk(null);
+    setFileError(null);
+  }
+
+  async function handleJsonFile(file: File | null) {
+    setFileError(null);
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as {
+        type?: string;
+        project_id?: string;
+        client_email?: string;
+      };
+      if (parsed.type !== "service_account" || !parsed.client_email) {
+        throw new Error("서비스 계정 JSON이 아닙니다.");
+      }
+      setSettings((prev) => ({
+        ...prev,
+        vertexServiceAccountJson: text.trim(),
+        vertexProjectId: parsed.project_id?.trim() || prev.vertexProjectId,
+        vertexLocation: prev.vertexLocation || "us-central1",
+      }));
+    } catch (err) {
+      setFileError(
+        err instanceof Error
+          ? err.message
+          : "JSON 파일을 읽지 못했습니다. Google Cloud에서 받은 키 파일을 선택해 주세요.",
+      );
+    }
   }
 
   async function handleTest() {
@@ -173,13 +204,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         </p>
 
         <div className="notice-box" style={{ marginTop: "0.75rem" }}>
-          1) Cloud Console에서 <strong>Vertex AI API</strong> 사용 설정
-          <br />
-          2) 서비스 계정 생성 → 역할 <strong>Vertex AI User</strong>
-          <br />
-          3) 키(JSON) 만들기 → 아래 칸에 전체 붙여넣기
-          <br />
-          4) 프로젝트 ID는 My First Project ID 입력 후 <strong>키 테스트</strong>
+          다운로드한 서비스 계정 <strong>JSON 파일</strong>을 선택하면 프로젝트 ID가
+          자동으로 채워집니다. 저장 후 <strong>키 테스트</strong>로 연결을 확인하세요.
         </div>
 
         <form onSubmit={handleSave} className="settings-form">
@@ -217,8 +243,34 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             />
           </label>
 
+          <label className="field">
+            <span>서비스 계정 JSON 파일</span>
+            <input
+              className="input"
+              type="file"
+              accept="application/json,.json"
+              onChange={(e) => {
+                void handleJsonFile(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
+            />
+            {fileError && (
+              <span className="muted" style={{ color: "var(--danger, #b42318)" }}>
+                {fileError}
+              </span>
+            )}
+            {settings.vertexServiceAccountJson.trim() && !fileError && (
+              <span className="muted">
+                JSON 로드됨
+                {settings.vertexProjectId
+                  ? ` · 프로젝트 ${settings.vertexProjectId}`
+                  : ""}
+              </span>
+            )}
+          </label>
+
           <SecretField
-            label="서비스 계정 JSON 키"
+            label="서비스 계정 JSON 키 (붙여넣기)"
             value={settings.vertexServiceAccountJson}
             onChange={(vertexServiceAccountJson) =>
               setSettings((prev) => ({ ...prev, vertexServiceAccountJson }))

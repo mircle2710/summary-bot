@@ -37,6 +37,24 @@ export type YearlyCount = {
   viewCount: number;
 };
 
+export type FrameworkPart = {
+  key: string;
+  title: string;
+};
+
+export type Framework = {
+  id: string;
+  label: string;
+  parts: FrameworkPart[];
+};
+
+export type AnalysisSection = {
+  key: string;
+  title: string;
+  content: string;
+  items: string[];
+};
+
 export type SummaryResult = {
   title: string;
   summary: string;
@@ -44,13 +62,21 @@ export type SummaryResult = {
   videoId: string;
   videoUrl: string;
   source?: "caption" | "metadata";
+  genreHint?: string;
+  frameworks?: Framework[];
+  sections?: AnalysisSection[];
+  activeFrameworkId?: string;
 };
 
-export type AnalysisType = "incident" | "cause" | "solution";
-
-export type AnalysisResult = {
-  type: AnalysisType;
-  title: string;
-  content: string;
-  items: string[];
+export const PET_PROBLEM_FRAMEWORK: Framework = {
+  id: "pet-problem",
+  label: "사건 · 원인 · 해결책&훈육",
+  parts: [
+    { key: "incident", title: "사건" },
+    { key: "cause", title: "원인" },
+    { key: "solution", title: "해결책 & 훈육" },
+  ],
 };
+
+/** @deprecated use PET_PROBLEM_FRAMEWORK */
+export const DEFAULT_PET_FRAMEWORK = PET_PROBLEM_FRAMEWORK;
