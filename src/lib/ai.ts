@@ -4,8 +4,6 @@ import type { AnalysisType } from "./types";
 const FALLBACK_MODELS = [
   process.env.GEMINI_MODEL,
   "gemini-2.0-flash-lite",
-  "gemini-1.5-flash",
-  "gemini-1.5-flash-8b",
   "gemini-2.0-flash",
 ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
 
@@ -35,7 +33,7 @@ export function formatGeminiError(error: unknown): string {
     if (/free_tier|free tier|무료/i.test(message)) {
       return "이 API 키가 아직 무료 등급으로 인식되고 있습니다. 설정에서 My First Project(결제/Tier 1) 키인지 확인하고, 업그레이드 직후라면 1~2분 뒤 다시 시도해 주세요.";
     }
-    return "Gemini 요청 한도(분당/일일 제한)에 걸렸습니다. 유료/체험이어도 잠시 제한될 수 있으니 20~60초 뒤 다시 시도해 주세요. 크레딧이 있어도 단시간 요청이 많으면 같은 오류가 납니다.";
+    return "Gemini 요청 한도(분당/일일 제한)에 걸렸습니다. Tier 1도 요청 횟수 제한이 있습니다. 1~2분 기다린 뒤 한 번만 다시 시도해 주세요.";
   }
   if (/401|403|API_KEY_INVALID|API key not valid/i.test(message)) {
     return "Gemini API 키가 올바르지 않습니다. 설정에서 키를 다시 확인해 주세요.";
@@ -51,11 +49,14 @@ export function formatGeminiError(error: unknown): string {
   return short.slice(0, 280) || "Gemini 요청에 실패했습니다.";
 }
 
-function isRetryableModelError(error: unknown) {
+function isRateLimitError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return /429|Too Many Requests|quota|RESOURCE_EXHAUSTED|404|not found|is not found for API version/i.test(
-    message,
-  );
+  return /429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message);
+}
+
+function isModelNotFoundError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /404|not found|is not found for API version/i.test(message);
 }
 
 async function sleep(ms: number) {
@@ -72,30 +73,26 @@ async function generateJson(params: {
   let lastError: unknown;
 
   for (const modelName of FALLBACK_MODELS) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const model = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: {
-            temperature: params.temperature,
-            responseMimeType: "application/json",
-            maxOutputTokens: 2048,
-          },
-        });
-        const result = await model.generateContent(params.prompt);
-        return result.response.text() || "{}";
-      } catch (error) {
-        lastError = error;
-        const message = error instanceof Error ? error.message : String(error);
-        const is429 = /429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message);
-        if (is429 && attempt === 0) {
-          await sleep(1500);
-          continue;
-        }
-        if (!isRetryableModelError(error)) {
-          throw new Error(formatGeminiError(error));
-        }
-        break;
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          temperature: params.temperature,
+          responseMimeType: "application/json",
+          maxOutputTokens: 2048,
+        },
+      });
+      const result = await model.generateContent(params.prompt);
+      return result.response.text() || "{}";
+    } catch (error) {
+      lastError = error;
+      // 429면 다른 모델로 넘기지 않음 — 요청 1회만 소비
+      if (isRateLimitError(error)) {
+        throw new Error(formatGeminiError(error));
+      }
+      // 모델 없음(404)일 때만 다음 모델 시도
+      if (!isModelNotFoundError(error)) {
+        throw new Error(formatGeminiError(error));
       }
     }
   }
