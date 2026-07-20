@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { CopyButton } from "@/components/CopyButton";
 import { ShortsFeedPanel } from "@/components/ShortsFeedPanel";
+import { BlogPanel } from "@/components/BlogPanel";
 import type { ExpertAnswerResult, ExpertReference } from "@/lib/expert";
 import type { ShortsTopic } from "@/lib/shorts";
 
@@ -206,6 +207,13 @@ export default function ExpertPage() {
             summary={result.answer}
             keyPoints={result.keyPoints || []}
             initialTopics={(result.shortsTopics || []) as ShortsTopic[]}
+          />
+
+          <BlogPanel
+            key={`blog-${result.title}-${result.answer.slice(0, 40)}`}
+            title={result.title}
+            summary={result.answer}
+            keyPoints={result.keyPoints || []}
           />
         </div>
       )}

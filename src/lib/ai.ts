@@ -8,6 +8,8 @@ import { PET_PROBLEM_FRAMEWORK } from "./types";
 import type { VertexCredentials } from "./request-keys";
 import type { ImageDensity, ImageStyleId, ShortsTopic } from "./shorts";
 import { IMAGE_STYLE_OPTIONS } from "./shorts";
+import type { BlogFontId, BlogToneId, BlogTopic } from "./blog";
+import { BLOG_TONE_OPTIONS } from "./blog";
 
 const FALLBACK_MODELS = [
   process.env.VERTEX_MODEL,
@@ -460,6 +462,172 @@ ${params.keyPoints
   });
   const parsed = parseJson<{ shortsTopics?: unknown }>(raw);
   return normalizeTopics(parsed.shortsTopics);
+}
+
+function normalizeBlogTopics(raw: unknown): BlogTopic[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as { id?: string; title?: string; angle?: string };
+      const title = row.title?.trim();
+      if (!title) return null;
+      return {
+        id: row.id?.trim() || `blog-topic-${index + 1}`,
+        title,
+        angle: row.angle?.trim() || "",
+      };
+    })
+    .filter((t): t is BlogTopic => Boolean(t))
+    .slice(0, 5);
+}
+
+export async function suggestBlogTopics(params: {
+  title: string;
+  summary: string;
+  keyPoints: string[];
+  customPrompt?: string;
+  credentials: VertexCredentials;
+}): Promise<BlogTopic[]> {
+  const custom = params.customPrompt?.trim();
+  const prompt = `한국어 블로그 기획. 완전한 JSON만 반환.
+형식: {"blogTopics":[{"id":"b1","title":"블로그 주제","angle":"한 줄 설명"}]}
+규칙: 주제 3~5개, 이모지 금지, 요약/전문답변 기반의 블로그 글감.
+${custom ? `사용자 추가 요청(최우선):\n${custom.slice(0, 800)}` : ""}
+
+제목: ${params.title}
+본문 요약:
+${params.summary.slice(0, 2500)}
+핵심:
+${params.keyPoints
+  .slice(0, 8)
+  .map((p) => `- ${p}`)
+  .join("\n")}`;
+
+  const raw = await generateJson({
+    credentials: params.credentials,
+    temperature: 0.35,
+    prompt,
+    maxOutputTokens: 2048,
+  });
+  const parsed = parseJson<{ blogTopics?: unknown }>(raw);
+  return normalizeBlogTopics(parsed.blogTopics);
+}
+
+export async function writeBlogArticle(params: {
+  title: string;
+  summary: string;
+  keyPoints: string[];
+  topicTitle?: string;
+  topicAngle?: string;
+  customPrompt?: string;
+  tone: BlogToneId;
+  font: BlogFontId;
+  credentials: VertexCredentials;
+}): Promise<{
+  title: string;
+  intro: string;
+  paragraphs: Array<{ id: string; heading?: string; text: string; imagePrompt: string }>;
+  thumbnailPrompt: string;
+}> {
+  const toneLabel =
+    BLOG_TONE_OPTIONS.find((t) => t.id === params.tone)?.label || "친근한 말투";
+  const custom = params.customPrompt?.trim();
+  const focus =
+    custom ||
+    [params.topicTitle, params.topicAngle].filter(Boolean).join(" — ") ||
+    "요약 내용을 블로그 글로";
+
+  const prompt = `한국어 블로그 작가. 완전한 JSON만 반환.
+목표: 블로그 본문을 단락으로 나누고, 단락별 이미지 프롬프트와 썸네일 프롬프트를 만든다.
+
+형식:
+{
+  "title":"블로그 제목",
+  "intro":"도입 문단",
+  "paragraphs":[
+    {"id":"p1","heading":"소제목(선택)","text":"본문 단락","imagePrompt":"English visual prompt for this paragraph"}
+  ],
+  "thumbnailPrompt":"English thumbnail prompt"
+}
+
+규칙:
+- 사용자 프롬프트/요청이 있으면 최우선 반영: ${custom || "(없음)"}
+- 말투: ${toneLabel}
+- 글씨체 선택은 화면 표시용이므로 문체에만 톤을 맞출 것 (font=${params.font})
+- paragraphs 4~7개, 각 text는 2~5문장
+- imagePrompt/thumbnailPrompt는 영어, 이미지 안 텍스트/워터마크 금지
+- 이모지 금지, JSON 완전하게
+포커스: ${focus}
+
+원본 제목: ${params.title}
+원본 내용:
+${params.summary.slice(0, 3500)}
+핵심:
+${params.keyPoints
+  .slice(0, 8)
+  .map((p) => `- ${p}`)
+  .join("\n")}`;
+
+  const raw = await generateJson({
+    credentials: params.credentials,
+    temperature: 0.35,
+    prompt,
+    maxOutputTokens: 6144,
+  });
+  const parsed = parseJson<{
+    title?: string;
+    intro?: string;
+    paragraphs?: unknown;
+    thumbnailPrompt?: string;
+  }>(raw);
+
+  const paragraphsRaw = Array.isArray(parsed.paragraphs) ? parsed.paragraphs : [];
+  const paragraphs = paragraphsRaw
+    .map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as {
+        id?: string;
+        heading?: string;
+        text?: string;
+        imagePrompt?: string;
+      };
+      const text = row.text?.trim();
+      if (!text) return null;
+      const heading = row.heading?.trim();
+      return {
+        id: row.id?.trim() || `p-${index + 1}`,
+        ...(heading ? { heading } : {}),
+        text,
+        imagePrompt:
+          row.imagePrompt?.trim() ||
+          `Editorial blog illustration for: ${text.slice(0, 180)}`,
+      };
+    })
+    .filter(
+      (
+        p,
+      ): p is {
+        id: string;
+        heading?: string;
+        text: string;
+        imagePrompt: string;
+      } => p !== null,
+    )
+    .slice(0, 8);
+
+  if (paragraphs.length === 0) {
+    throw new Error("블로그 단락을 만들지 못했습니다. 주제를 바꿔 다시 시도해 주세요.");
+  }
+
+  return {
+    title: parsed.title?.trim() || params.topicTitle || params.title || "블로그 글",
+    intro: parsed.intro?.trim() || "",
+    paragraphs,
+    thumbnailPrompt:
+      parsed.thumbnailPrompt?.trim() ||
+      `Blog thumbnail about ${params.topicTitle || params.title}`,
+  };
 }
 
 export async function buildShortsScript(params: {

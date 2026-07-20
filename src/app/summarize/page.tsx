@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import { CopyButton } from "@/components/CopyButton";
 import { ShortsFeedPanel } from "@/components/ShortsFeedPanel";
+import { BlogPanel } from "@/components/BlogPanel";
 import {
   buildSummaryMarkdown,
   downloadTextFile,
@@ -281,6 +282,13 @@ export default function SummarizePage() {
             summary={result.summary}
             keyPoints={result.keyPoints || []}
             initialTopics={result.shortsTopics || []}
+          />
+
+          <BlogPanel
+            key={`blog-${result.videoId}`}
+            title={result.title}
+            summary={result.summary}
+            keyPoints={result.keyPoints || []}
           />
         </div>
       )}

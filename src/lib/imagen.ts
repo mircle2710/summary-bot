@@ -66,6 +66,7 @@ export async function generateImagenImage(params: {
   credentials: VertexCredentials;
   prompt: string;
   seed?: number;
+  aspectRatio?: "9:16" | "16:9" | "1:1" | "4:3" | "3:4";
 }): Promise<{ mimeType: string; base64: string }> {
   const token = await getAccessToken(params.credentials.serviceAccountJson);
   const { projectId, location } = params.credentials;
@@ -99,7 +100,7 @@ export async function generateImagenImage(params: {
           generationConfig: {
             responseModalities: ["TEXT", "IMAGE"],
             imageConfig: {
-              aspectRatio: "9:16",
+              aspectRatio: params.aspectRatio || "9:16",
             },
           },
         }),
