@@ -2,7 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
-import { composeSubtitleOnImage, downloadDataUrl } from "@/lib/image-compose";
+import {
+  composeSubtitleOnImage,
+  downloadDataUrl,
+  previewFontCss,
+} from "@/lib/image-compose";
 import {
   estimateImageCount,
   estimateSentenceCount,
@@ -23,6 +27,79 @@ type ShortsFeedPanelProps = {
   keyPoints: string[];
   initialTopics: ShortsTopic[];
 };
+
+function packScenesFromSentences(
+  sentences: string[],
+  density: ImageDensity,
+  previous: ShortsScene[],
+): ShortsScene[] {
+  const cleaned = sentences.map((s) => s.trim()).filter(Boolean);
+  const next: ShortsScene[] = [];
+  for (let i = 0; i < cleaned.length; i += density) {
+    const chunk = cleaned.slice(i, i + density);
+    const text = chunk.join(" ");
+    const index = next.length;
+    const prev = previous[index];
+    const textChanged = !prev || prev.text !== text;
+    next.push({
+      id: prev?.id || `scene-${index + 1}`,
+      text,
+      imagePrompt:
+        !textChanged && prev?.imagePrompt
+          ? prev.imagePrompt
+          : `Vertical 9:16 scene illustrating: ${text}`,
+      extraPrompt: prev?.extraPrompt || "",
+      imageRawDataUrl: textChanged ? null : prev?.imageRawDataUrl || null,
+      imageDataUrl: textChanged ? null : prev?.imageDataUrl || null,
+      generating: false,
+      error: null,
+    });
+  }
+  return next;
+}
+
+function ScenePreview({
+  scene,
+  index,
+  subtitle,
+}: {
+  scene: ShortsScene;
+  index: number;
+  subtitle: SubtitleOptions;
+}) {
+  const fontCss = previewFontCss(subtitle.fontFamily);
+  // Preview frame is ~280px wide vs 768 canvas → scale roughly
+  const previewFontPx = Math.max(12, Math.round(subtitle.fontSize * (280 / 768)));
+
+  if (scene.imageDataUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className="scene-image"
+        src={scene.imageDataUrl}
+        alt={`숏츠 장면 ${index + 1}`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="scene-black-preview"
+      aria-label={`장면 ${index + 1} 검은 화면 미리보기`}
+    >
+      <p
+        className={`scene-black-caption pos-${subtitle.position}`}
+        style={{
+          fontFamily: fontCss,
+          fontSize: `${previewFontPx}px`,
+        }}
+      >
+        {scene.text || "(문장을 입력해 주세요)"}
+      </p>
+      <span className="scene-black-badge">이미지 대기</span>
+    </div>
+  );
+}
 
 export function ShortsFeedPanel({
   title,
@@ -59,6 +136,7 @@ export function ShortsFeedPanel({
   }, [summary, keyPoints.length, density]);
 
   const selectedTopic = topics.find((t) => t.id === selectedTopicId) || null;
+  const previewFontCssValue = previewFontCss(subtitle.fontFamily);
 
   async function refreshTopics() {
     setLoadingTopics(true);
@@ -119,7 +197,11 @@ export function ShortsFeedPanel({
       if (!res.ok || !data.scenes) {
         throw new Error(data.error || "숏츠 문장 생성에 실패했습니다.");
       }
-      setSentences(data.sentences || []);
+      const nextSentences =
+        data.sentences && data.sentences.length > 0
+          ? data.sentences
+          : data.scenes.map((s) => s.text);
+      setSentences(nextSentences);
       setScenes(
         data.scenes.map((scene) => ({
           ...scene,
@@ -137,8 +219,38 @@ export function ShortsFeedPanel({
     }
   }
 
-  async function generateOne(sceneId: string, forceNewSeed = false) {
-    const scene = scenes.find((s) => s.id === sceneId);
+  function updateSentence(index: number, value: string) {
+    setSentences((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  }
+
+  function addSentence() {
+    setSentences((prev) => [...prev, ""]);
+  }
+
+  function removeSentence(index: number) {
+    setSentences((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function applySentenceEditsToScenes() {
+    const next = packScenesFromSentences(sentences, density, scenes);
+    if (next.length === 0) {
+      setError("최소 한 문장은 남겨 주세요.");
+      return;
+    }
+    setError(null);
+    setScenes(next);
+  }
+
+  async function generateOne(
+    sceneId: string,
+    forceNewSeed = false,
+    sceneOverride?: ShortsScene,
+  ) {
+    const scene = sceneOverride || scenes.find((s) => s.id === sceneId);
     if (!scene) return;
 
     setScenes((prev) =>
@@ -179,6 +291,9 @@ export function ShortsFeedPanel({
           s.id === sceneId
             ? {
                 ...s,
+                text: scene.text,
+                imagePrompt: scene.imagePrompt,
+                extraPrompt: scene.extraPrompt,
                 imageRawDataUrl: data.dataUrl!,
                 imageDataUrl: composed,
                 generating: false,
@@ -221,10 +336,12 @@ export function ShortsFeedPanel({
   async function generateAll() {
     setGeneratingAll(true);
     setError(null);
-    for (const scene of scenes) {
+    const packed = packScenesFromSentences(sentences, density, scenes);
+    setScenes(packed.map((s) => ({ ...s, generating: false, error: null })));
+    for (const scene of packed) {
       // sequential to reduce quota spikes
       // eslint-disable-next-line no-await-in-loop
-      await generateOne(scene.id, true);
+      await generateOne(scene.id, true, scene);
     }
     setGeneratingAll(false);
   }
@@ -339,57 +456,73 @@ export function ShortsFeedPanel({
           문장을 자막으로 이미지에 추가
         </label>
         {subtitle.enabled && (
-          <div className="subtitle-controls">
-            <label className="field">
-              <span>위치</span>
-              <select
-                className="input"
-                value={subtitle.position}
-                onChange={(e) =>
-                  setSubtitle((prev) => ({
-                    ...prev,
-                    position: e.target.value as SubtitlePosition,
-                  }))
-                }
-              >
-                <option value="top">상단</option>
-                <option value="center">중앙</option>
-                <option value="bottom">하단</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>글씨체</span>
-              <select
-                className="input"
-                value={subtitle.fontFamily}
-                onChange={(e) =>
-                  setSubtitle((prev) => ({ ...prev, fontFamily: e.target.value }))
-                }
-              >
-                {SUBTITLE_FONTS.map((font) => (
-                  <option key={font.id} value={font.id}>
-                    {font.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>글씨 크기 ({subtitle.fontSize}px)</span>
-              <input
-                className="input"
-                type="range"
-                min={24}
-                max={72}
-                value={subtitle.fontSize}
-                onChange={(e) =>
-                  setSubtitle((prev) => ({
-                    ...prev,
-                    fontSize: Number(e.target.value),
-                  }))
-                }
-              />
-            </label>
-          </div>
+          <>
+            <div className="subtitle-controls">
+              <label className="field">
+                <span>위치</span>
+                <select
+                  className="input"
+                  value={subtitle.position}
+                  onChange={(e) =>
+                    setSubtitle((prev) => ({
+                      ...prev,
+                      position: e.target.value as SubtitlePosition,
+                    }))
+                  }
+                >
+                  <option value="top">상단</option>
+                  <option value="center">중앙</option>
+                  <option value="bottom">하단</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>글씨체</span>
+                <select
+                  className="input"
+                  value={subtitle.fontFamily}
+                  onChange={(e) =>
+                    setSubtitle((prev) => ({ ...prev, fontFamily: e.target.value }))
+                  }
+                >
+                  {SUBTITLE_FONTS.map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>글씨 크기 ({subtitle.fontSize}px)</span>
+                <input
+                  className="input"
+                  type="range"
+                  min={24}
+                  max={72}
+                  value={subtitle.fontSize}
+                  onChange={(e) =>
+                    setSubtitle((prev) => ({
+                      ...prev,
+                      fontSize: Number(e.target.value),
+                    }))
+                  }
+                />
+              </label>
+            </div>
+            <div className="subtitle-size-preview" aria-live="polite">
+              <span className="muted">글씨 크기 미리보기</span>
+              <div className="subtitle-size-preview-frame">
+                <p
+                  className={`scene-black-caption pos-${subtitle.position}`}
+                  style={{
+                    fontFamily: previewFontCssValue,
+                    fontSize: `${Math.max(12, Math.round(subtitle.fontSize * (200 / 768)))}px`,
+                  }}
+                >
+                  샘플 자막 {subtitle.fontSize}px
+                </p>
+              </div>
+            </div>
+          </>
         )}
       </div>
 
@@ -419,6 +552,13 @@ export function ShortsFeedPanel({
             <div className="form-row">
               <button
                 type="button"
+                className="btn btn-secondary"
+                onClick={applySentenceEditsToScenes}
+              >
+                문장 수정 반영
+              </button>
+              <button
+                type="button"
                 className="btn btn-primary"
                 onClick={() => void generateAll()}
                 disabled={generatingAll || scenes.some((s) => s.generating)}
@@ -444,25 +584,69 @@ export function ShortsFeedPanel({
             </div>
           </div>
 
-          {sentences.length > 0 && (
-            <details style={{ margin: "0.75rem 0" }}>
-              <summary className="muted">전체 문장 목록 ({sentences.length})</summary>
-              <ol className="sentence-list">
-                {sentences.map((sentence) => (
-                  <li key={sentence}>{sentence}</li>
-                ))}
-              </ol>
-            </details>
-          )}
+          <div className="sentence-editor">
+            <div className="sentence-editor-head">
+              <strong>전체 문장 목록 ({sentences.length}) — 수정 가능</strong>
+              <button type="button" className="btn btn-ghost" onClick={addSentence}>
+                문장 추가
+              </button>
+            </div>
+            <p className="muted" style={{ margin: "0.35rem 0 0.65rem" }}>
+              이미지 만들기 전에 문장을 고치고, <strong>문장 수정 반영</strong>을 누르면
+              아래 검은 화면 미리보기가 갱신됩니다.
+            </p>
+            <ol className="sentence-edit-list">
+              {sentences.map((sentence, index) => (
+                <li key={`sentence-${index}`}>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    value={sentence}
+                    onChange={(e) => updateSentence(index, e.target.value)}
+                    placeholder={`${index + 1}번 문장`}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => removeSentence(index)}
+                    disabled={sentences.length <= 1}
+                  >
+                    삭제
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
 
           <div className="scene-stack">
             {scenes.map((scene, index) => (
               <article key={scene.id} className="scene-card">
                 <div className="scene-head">
-                  <strong>
-                    {index + 1}. {scene.text}
-                  </strong>
+                  <strong>장면 {index + 1}</strong>
                 </div>
+                <label className="field">
+                  <span>이 장면 자막/문장</span>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    value={scene.text}
+                    onChange={(e) =>
+                      setScenes((prev) =>
+                        prev.map((s) =>
+                          s.id === scene.id
+                            ? {
+                                ...s,
+                                text: e.target.value,
+                                imageRawDataUrl: null,
+                                imageDataUrl: null,
+                              }
+                            : s,
+                        ),
+                      )
+                    }
+                  />
+                </label>
+                <ScenePreview scene={scene} index={index} subtitle={subtitle} />
                 <label className="field">
                   <span>이 장면 추가 지시사항 (프롬프트)</span>
                   <textarea
@@ -478,7 +662,7 @@ export function ShortsFeedPanel({
                         ),
                       )
                     }
-                    placeholder="예: 검은 그로넨달이 잔디밭에서 뛰는 장면, 밝은 낮"
+                    placeholder="예: 고양이가 모기약을 멀리하는 장면, 밝은 낮"
                   />
                 </label>
                 <div className="form-row">
@@ -504,14 +688,6 @@ export function ShortsFeedPanel({
                   </button>
                 </div>
                 {scene.error && <div className="error-box">{scene.error}</div>}
-                {scene.imageDataUrl && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    className="scene-image"
-                    src={scene.imageDataUrl}
-                    alt={`숏츠 장면 ${index + 1}`}
-                  />
-                )}
               </article>
             ))}
           </div>
