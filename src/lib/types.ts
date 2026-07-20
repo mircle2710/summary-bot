@@ -26,11 +26,15 @@ export type ChannelVideo = {
   description: string;
   publishedAt: string;
   thumbnailUrl: string;
+  viewCount: number;
+  url: string;
+  hashtags: string[];
 };
 
 export type YearlyCount = {
   year: number;
   count: number;
+  viewCount: number;
 };
 
 export type SummaryResult = {

@@ -246,13 +246,18 @@ export async function getChannelVideos(
       if (item.snippet.title === "Private video" || item.snippet.title === "Deleted video") {
         continue;
       }
+      const id = item.contentDetails.videoId || item.snippet.resourceId.videoId;
+      const description = item.snippet.description || "";
       videos.push({
-        id: item.contentDetails.videoId || item.snippet.resourceId.videoId,
+        id,
         title: item.snippet.title,
-        description: item.snippet.description,
+        description,
         publishedAt: item.contentDetails.videoPublishedAt || item.snippet.publishedAt,
         thumbnailUrl:
           item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.default?.url || "",
+        viewCount: 0,
+        url: `https://www.youtube.com/watch?v=${id}`,
+        hashtags: extractHashtags(description),
       });
     }
 
@@ -260,18 +265,61 @@ export async function getChannelVideos(
     if (!pageToken) break;
   }
 
-  return videos;
+  return enrichVideosWithStats(videos, options.apiKey);
+}
+
+export function extractHashtags(text: string): string[] {
+  const matches = text.match(/#[\w가-힣ㄱ-ㅎㅏ-ㅣ]+/gu) || [];
+  return Array.from(new Set(matches));
+}
+
+export async function enrichVideosWithStats(
+  videos: ChannelVideo[],
+  apiKey?: string,
+): Promise<ChannelVideo[]> {
+  if (videos.length === 0) return videos;
+
+  const viewMap = new Map<string, number>();
+  for (let i = 0; i < videos.length; i += 50) {
+    const chunk = videos.slice(i, i + 50);
+    const data = await ytFetch<{
+      items?: Array<{
+        id: string;
+        statistics?: { viewCount?: string };
+      }>;
+    }>(
+      "/videos",
+      {
+        part: "statistics",
+        id: chunk.map((v) => v.id).join(","),
+      },
+      apiKey,
+    );
+
+    for (const item of data.items || []) {
+      viewMap.set(item.id, Number(item.statistics?.viewCount || 0));
+    }
+  }
+
+  return videos.map((video) => ({
+    ...video,
+    viewCount: viewMap.get(video.id) ?? video.viewCount,
+  }));
 }
 
 export function groupVideosByYear(videos: ChannelVideo[]): YearlyCount[] {
-  const map = new Map<number, number>();
+  const map = new Map<number, { count: number; viewCount: number }>();
   for (const video of videos) {
     const year = new Date(video.publishedAt).getFullYear();
     if (Number.isNaN(year)) continue;
-    map.set(year, (map.get(year) || 0) + 1);
+    const prev = map.get(year) || { count: 0, viewCount: 0 };
+    map.set(year, {
+      count: prev.count + 1,
+      viewCount: prev.viewCount + (video.viewCount || 0),
+    });
   }
   return Array.from(map.entries())
-    .map(([year, count]) => ({ year, count }))
+    .map(([year, stats]) => ({ year, count: stats.count, viewCount: stats.viewCount }))
     .sort((a, b) => a.year - b.year);
 }
 

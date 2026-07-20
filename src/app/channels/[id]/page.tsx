@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { CopyButton } from "@/components/CopyButton";
 import { apiFetch } from "@/lib/api-client";
 import { formatCount } from "@/lib/format";
 import type { ChannelDetails, ChannelVideo, YearlyCount } from "@/lib/types";
@@ -50,6 +51,11 @@ export default function ChannelDetailPage() {
   const maxYearCount = useMemo(() => {
     if (!data?.yearly?.length) return 1;
     return Math.max(...data.yearly.map((y) => y.count), 1);
+  }, [data]);
+
+  const maxYearViews = useMemo(() => {
+    if (!data?.yearly?.length) return 1;
+    return Math.max(...data.yearly.map((y) => y.viewCount || 0), 1);
   }, [data]);
 
   if (loading) {
@@ -133,25 +139,41 @@ export default function ChannelDetailPage() {
 
       <div className="panel" style={{ marginBottom: "1.25rem" }}>
         <h2 style={{ margin: "0 0 0.35rem", fontFamily: "var(--font-display)" }}>
-          연도별 업로드
+          연도별 업로드·조회수
         </h2>
         <p className="muted" style={{ margin: "0 0 1rem" }}>
-          최근 수집한 영상 {allVideoCount ?? videos.length}개 기준
+          최근 수집한 영상 {allVideoCount ?? videos.length}개 기준 · 조회수는 해당 연도 영상의
+          현재 조회수 합계
         </p>
         {yearly.length === 0 ? (
           <p className="muted">연도별 데이터가 없습니다.</p>
         ) : (
           <div className="year-bars">
             {yearly.map((row) => (
-              <div key={row.year} className="year-row">
+              <div key={row.year} className="year-row year-row-rich">
                 <span>{row.year}</span>
-                <div className="year-bar-track">
-                  <div
-                    className="year-bar-fill"
-                    style={{ width: `${(row.count / maxYearCount) * 100}%` }}
-                  />
+                <div className="year-metrics">
+                  <div className="year-metric">
+                    <div className="year-bar-track">
+                      <div
+                        className="year-bar-fill"
+                        style={{ width: `${(row.count / maxYearCount) * 100}%` }}
+                      />
+                    </div>
+                    <strong>영상 {row.count}개</strong>
+                  </div>
+                  <div className="year-metric">
+                    <div className="year-bar-track year-bar-track-views">
+                      <div
+                        className="year-bar-fill year-bar-fill-views"
+                        style={{
+                          width: `${((row.viewCount || 0) / maxYearViews) * 100}%`,
+                        }}
+                      />
+                    </div>
+                    <strong>조회 {formatCount(row.viewCount || 0)}</strong>
+                  </div>
                 </div>
-                <strong style={{ textAlign: "right" }}>{row.count}</strong>
               </div>
             ))}
           </div>
@@ -159,45 +181,53 @@ export default function ChannelDetailPage() {
       </div>
 
       <div className="panel">
-        <h2 style={{ margin: "0 0 0.85rem", fontFamily: "var(--font-display)" }}>
+        <h2 style={{ margin: "0 0 0.35rem", fontFamily: "var(--font-display)" }}>
           최신 동영상
         </h2>
+        <p className="muted" style={{ margin: "0 0 0.85rem" }}>
+          날짜는 유튜브 업로드일입니다.
+        </p>
         {videos.length === 0 ? (
           <p className="muted">영상이 없습니다.</p>
         ) : (
           <div className="video-list">
-            {videos.map((video) => (
-              <a
-                key={video.id}
-                className="video-item"
-                href={`https://www.youtube.com/watch?v=${video.id}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={video.thumbnailUrl} alt="" />
-                <div>
-                  <strong style={{ display: "block", marginBottom: "0.35rem" }}>
-                    {video.title}
-                  </strong>
-                  <span className="muted">
-                    {new Date(video.publishedAt).toLocaleDateString("ko-KR")}
-                  </span>
-                  <p
-                    className="muted"
-                    style={{
-                      margin: "0.4rem 0 0",
-                      display: "-webkit-box",
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: "vertical",
-                      overflow: "hidden",
-                    }}
-                  >
-                    {video.description || "설명 없음"}
-                  </p>
-                </div>
-              </a>
-            ))}
+            {videos.map((video) => {
+              const url = video.url || `https://www.youtube.com/watch?v=${video.id}`;
+              const hashtags = video.hashtags || [];
+              return (
+                <article key={video.id} className="video-item">
+                  <a href={url} target="_blank" rel="noreferrer" className="video-thumb-link">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={video.thumbnailUrl} alt="" />
+                  </a>
+                  <div className="video-body">
+                    <a href={url} target="_blank" rel="noreferrer" className="video-title-link">
+                      <strong>{video.title}</strong>
+                    </a>
+                    <div className="video-meta">
+                      <span>업로드일 {new Date(video.publishedAt).toLocaleDateString("ko-KR")}</span>
+                      <span>조회수 {formatCount(video.viewCount || 0)}</span>
+                    </div>
+
+                    <div className="video-url-row">
+                      <code className="video-url">{url}</code>
+                      <CopyButton text={url} label="URL 복사" />
+                    </div>
+
+                    {hashtags.length > 0 ? (
+                      <div className="video-hashtag-row">
+                        <p className="video-hashtags">{hashtags.join(" ")}</p>
+                        <CopyButton text={hashtags.join(" ")} label="해시태그 복사" />
+                      </div>
+                    ) : (
+                      <p className="muted" style={{ margin: "0.35rem 0 0" }}>
+                        해시태그 없음
+                      </p>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </div>
