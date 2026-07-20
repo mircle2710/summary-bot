@@ -22,18 +22,47 @@ type AccessCache = {
 
 let accessCache: AccessCache | null = null;
 
-function parseJson<T>(raw: string): T {
+function extractJsonText(raw: string): string {
   const cleaned = raw
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/i, "")
     .trim();
-  return JSON.parse(cleaned) as T;
+
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return cleaned.slice(start, end + 1);
+  }
+  return cleaned;
+}
+
+function repairJsonText(text: string): string {
+  // Remove trailing commas before } or ]
+  return text.replace(/,\s*([}\]])/g, "$1");
+}
+
+function parseJson<T>(raw: string): T {
+  const extracted = extractJsonText(raw);
+  try {
+    return JSON.parse(extracted) as T;
+  } catch (firstError) {
+    try {
+      return JSON.parse(repairJsonText(extracted)) as T;
+    } catch {
+      const message =
+        firstError instanceof Error ? firstError.message : String(firstError);
+      throw new Error(`JSON_PARSE_FAILED: ${message}`);
+    }
+  }
 }
 
 export function formatVertexError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
 
+  if (/JSON_PARSE_FAILED|Unterminated string|Unexpected token|JSON/i.test(message)) {
+    return "AI 응답을 해석하지 못했습니다. 잠시 후 다시 요약해 주세요.";
+  }
   if (/PERMISSION_DENIED|403/i.test(message)) {
     return "Vertex AI 권한이 없습니다. 서비스 계정에 'Vertex AI User' 역할을 부여하고, Vertex AI API를 사용 설정했는지 확인해 주세요.";
   }
@@ -83,6 +112,7 @@ async function getAccessToken(serviceAccountJson: string): Promise<string> {
 type VertexResponse = {
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
+    finishReason?: string;
   }>;
   error?: {
     code?: number;
@@ -96,6 +126,7 @@ async function callVertexOnce(params: {
   model: string;
   temperature: number;
   prompt: string;
+  maxOutputTokens?: number;
 }): Promise<string> {
   const token = await getAccessToken(params.credentials.serviceAccountJson);
   const { projectId, location } = params.credentials;
@@ -113,7 +144,7 @@ async function callVertexOnce(params: {
       generationConfig: {
         temperature: params.temperature,
         responseMimeType: "application/json",
-        maxOutputTokens: 2048,
+        maxOutputTokens: params.maxOutputTokens ?? 8192,
       },
     }),
   });
@@ -124,9 +155,14 @@ async function callVertexOnce(params: {
     throw new Error(message);
   }
 
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
+  const candidate = data.candidates?.[0];
+  const text =
+    candidate?.content?.parts?.map((p) => p.text || "").join("") || "";
   if (!text.trim()) {
     throw new Error("Vertex AI 응답이 비어 있습니다.");
+  }
+  if (candidate?.finishReason === "MAX_TOKENS") {
+    throw new Error("JSON_PARSE_FAILED: 응답이 중간에 잘렸습니다.");
   }
   return text;
 }
@@ -135,25 +171,43 @@ async function generateJson(params: {
   credentials: VertexCredentials;
   temperature: number;
   prompt: string;
+  maxOutputTokens?: number;
 }) {
   let lastError: unknown;
 
   for (const modelName of FALLBACK_MODELS) {
-    try {
-      return await callVertexOnce({
-        credentials: params.credentials,
-        model: modelName,
-        temperature: params.temperature,
-        prompt: params.prompt,
-      });
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
-        throw new Error(formatVertexError(error));
-      }
-      if (!/404|NOT_FOUND|was not found|is not supported/i.test(message)) {
-        throw new Error(formatVertexError(error));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const prompt =
+          attempt === 0
+            ? params.prompt
+            : `${params.prompt}
+
+중요: 반드시 완전한 JSON 객체만 출력하세요. 문자열 안의 따옴표는 이스케이프하고, 잘린 응답 금지.`;
+        const raw = await callVertexOnce({
+          credentials: params.credentials,
+          model: modelName,
+          temperature: attempt === 0 ? params.temperature : Math.min(params.temperature, 0.15),
+          prompt,
+          maxOutputTokens: params.maxOutputTokens,
+        });
+        // Validate JSON now so model fallback/retry can happen
+        parseJson<unknown>(raw);
+        return raw;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+          throw new Error(formatVertexError(error));
+        }
+        if (/JSON_PARSE_FAILED|Unterminated string|Unexpected token/i.test(message)) {
+          // retry same model once, then try next model
+          continue;
+        }
+        if (!/404|NOT_FOUND|was not found|is not supported/i.test(message)) {
+          throw new Error(formatVertexError(error));
+        }
+        break;
       }
     }
   }
@@ -307,42 +361,37 @@ export async function summarizeTranscript(params: {
 - 요약 첫머리에 "자막이 없어 제목·설명 기준으로 정리했습니다." 포함.`
       : `- 자막을 기준으로 정리.`;
 
-  const prompt = `한국어 요약·숏츠 기획 전문가. JSON만 반환.
+  const prompt = `한국어 요약·숏츠 기획 전문가. 완전한 JSON 객체만 반환.
 이 결과는 유튜브 숏츠 피드를 만들기 위한 재료입니다.
 
 형식:
 {
-  "summary":"3~5문단",
-  "keyPoints":["5~8개"],
+  "summary":"2~4문단 문자열",
+  "keyPoints":["핵심1","핵심2","핵심3","핵심4","핵심5"],
   "genreHint":"장르 한 줄",
   "usePetFramework": false,
   "primaryFramework":{
-    "id":"shorts-...",
-    "label":"훅 · 핵심 · 여운",
+    "id":"shorts-breed",
+    "label":"매력 · 특징 · 주의점",
     "parts":[
-      {"key":"hook","title":"훅"},
-      {"key":"core","title":"핵심"},
-      {"key":"payoff","title":"여운"}
+      {"key":"hook","title":"매력 훅"},
+      {"key":"core","title":"핵심 특징"},
+      {"key":"payoff","title":"키울 때 주의점"}
     ]
   },
   "frameworks":[
-    {"id":"alt-1","label":"...","parts":[{"key":"a","title":"파트1"},{"key":"b","title":"파트2"},{"key":"c","title":"파트3"}]}
-  ],
-  "sections":[
-    {"key":"...","title":"...","content":"개요","items":["숏츠에 쓸 문장/장면"]}
+    {"id":"alt-1","label":"대안 라벨","parts":[{"key":"a","title":"파트1"},{"key":"b","title":"파트2"},{"key":"c","title":"파트3"}]}
   ]
 }
 
 규칙:
-- 사실 왜곡 금지, 이모지 금지
-- usePetFramework=true 는 "문제 상황 → 원인 → 해결/훈육"이 영상의 주된 서사일 때만 (문제행동 교정, 훈련 갈등 해결 등)
+- 사실 왜곡 금지, 이모지 금지, JSON 문자열을 중간에 자르지 말 것
+- usePetFramework=true 는 "문제 상황 → 원인 → 해결/훈육"이 주된 서사일 때만
 - 백과/정보/리뷰/브이로그/요리 등 설명형이면 usePetFramework=false
-- usePetFramework=true 이면 primaryFramework는 반드시 id="pet-problem", parts=사건/원인/해결책 & 훈육
-- usePetFramework=false 이면 primaryFramework는 숏츠용 3파트. "이 영상으로 숏츠를 만든다면 무엇을 뽑을지" 기준으로 파트명 정하기
-  예: 견종백과 → 한줄 매력 / 핵심 특징 / 키울 때 주의점
-  예: 요리 → 비주얼 훅 / 핵심 레시피 / 실패 방지 팁
-- sections는 primaryFramework의 3파트를 채울 것. items는 숏츠 대본/자막에 바로 쓸 짧은 문장 위주
-- frameworks에는 primary 외 대안 1개만 (숏츠 관점 또는 pet-problem 중 안 쓴 쪽)
+- usePetFramework=true 이면 primaryFramework id는 "pet-problem", parts는 사건/원인/해결책 & 훈육
+- usePetFramework=false 이면 primaryFramework는 숏츠용 3파트 (이 영상으로 숏츠를 만든다면 무엇을 뽑을지)
+- frameworks에는 primary 외 대안 0~1개만
+- summary/keyPoints만 작성. sections 필드는 넣지 말 것
 ${sourceRule}
 
 제목: ${params.title}
@@ -351,12 +400,13 @@ ${sourceRule}
 ${params.description.slice(0, 1200)}
 
 ${source === "caption" ? "자막:" : "원문:"}
-${params.transcript.slice(0, 8000)}`;
+${params.transcript.slice(0, 6000)}`;
 
   const raw = await generateJson({
     credentials: params.credentials,
-    temperature: 0.3,
+    temperature: 0.25,
     prompt,
+    maxOutputTokens: 4096,
   });
   const parsed = parseJson<{
     summary?: string;
@@ -365,7 +415,6 @@ ${params.transcript.slice(0, 8000)}`;
     usePetFramework?: boolean;
     primaryFramework?: unknown;
     frameworks?: unknown;
-    sections?: unknown;
   }>(raw);
 
   const usePet = Boolean(parsed.usePetFramework);
@@ -384,7 +433,27 @@ ${params.transcript.slice(0, 8000)}`;
       : normalizeFramework(parsed.primaryFramework)) ||
     (usePet ? PET_PROBLEM_FRAMEWORK : fallbackShorts);
   const frameworks = normalizeFrameworkList(parsed.frameworks, primary);
-  const sections = normalizeSections(parsed.sections, primary);
+
+  // Fill sections in a second, smaller JSON call for reliability
+  let sections: AnalysisSection[] = primary.parts.map((part) => ({
+    key: part.key,
+    title: part.title,
+    content: "",
+    items: [],
+  }));
+  try {
+    const filled = await analyzeByFramework({
+      framework: primary,
+      title: params.title,
+      summary: parsed.summary || "",
+      keyPoints: parsed.keyPoints || [],
+      transcript: params.transcript,
+      credentials: params.credentials,
+    });
+    sections = filled.sections;
+  } catch {
+    // Keep empty section shells; UI still shows summary
+  }
 
   return {
     summary: parsed.summary || "",
