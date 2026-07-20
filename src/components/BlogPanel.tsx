@@ -7,7 +7,9 @@ import { downloadDataUrl } from "@/lib/image-compose";
 import {
   BLOG_FONT_OPTIONS,
   BLOG_TONE_OPTIONS,
+  formatHashtagsForCopy,
   type BlogFontId,
+  type BlogMeta,
   type BlogParagraph,
   type BlogToneId,
   type BlogTopic,
@@ -31,6 +33,7 @@ export function BlogPanel({ title, summary, keyPoints }: BlogPanelProps) {
 
   const [articleTitle, setArticleTitle] = useState("");
   const [intro, setIntro] = useState("");
+  const [meta, setMeta] = useState<BlogMeta | null>(null);
   const [paragraphs, setParagraphs] = useState<BlogParagraph[]>([]);
   const [thumbnailPrompt, setThumbnailPrompt] = useState("");
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
@@ -82,6 +85,7 @@ export function BlogPanel({ title, summary, keyPoints }: BlogPanelProps) {
     setWriting(true);
     setError(null);
     setParagraphs([]);
+    setMeta(null);
     setThumbnailUrl(null);
     try {
       const res = await apiFetch("/api/blog/write", {
@@ -108,6 +112,7 @@ export function BlogPanel({ title, summary, keyPoints }: BlogPanelProps) {
           imagePrompt: string;
         }>;
         thumbnailPrompt?: string;
+        meta?: BlogMeta;
         error?: string;
       };
       if (!res.ok || !data.paragraphs?.length) {
@@ -115,6 +120,7 @@ export function BlogPanel({ title, summary, keyPoints }: BlogPanelProps) {
       }
       setArticleTitle(data.title || selectedTopic?.title || "블로그 글");
       setIntro(data.intro || "");
+      setMeta(data.meta || null);
       setThumbnailPrompt(data.thumbnailPrompt || "");
       setParagraphs(
         data.paragraphs.map((p) => ({
@@ -339,6 +345,54 @@ export function BlogPanel({ title, summary, keyPoints }: BlogPanelProps) {
               {generatingAll ? "단락 이미지 생성 중…" : "단락별 이미지 생성"}
             </button>
           </div>
+
+          {meta && (
+            <div className="blog-meta-box">
+              <h4 style={{ margin: "0 0 0.65rem" }}>발행 · SEO 메타</h4>
+              <div className="blog-meta-list">
+                <div className="blog-meta-row">
+                  <div className="blog-meta-label">
+                    <span>슬러그</span>
+                    <CopyButton text={meta.slug} label="복사" />
+                  </div>
+                  <code className="blog-meta-value">{meta.slug}</code>
+                </div>
+                <div className="blog-meta-row">
+                  <div className="blog-meta-label">
+                    <span>요약 (검색 / 카드노출)</span>
+                    <CopyButton text={meta.cardSummary} label="복사" />
+                  </div>
+                  <p className="blog-meta-value">{meta.cardSummary}</p>
+                </div>
+                <div className="blog-meta-row">
+                  <div className="blog-meta-label">
+                    <span>해시태그</span>
+                    <CopyButton
+                      text={formatHashtagsForCopy(meta.hashtags)}
+                      label="복사"
+                    />
+                  </div>
+                  <p className="blog-meta-value">
+                    {formatHashtagsForCopy(meta.hashtags) || "—"}
+                  </p>
+                </div>
+                <div className="blog-meta-row">
+                  <div className="blog-meta-label">
+                    <span>SEO 제목 (검색 결과)</span>
+                    <CopyButton text={meta.seoTitle} label="복사" />
+                  </div>
+                  <p className="blog-meta-value">{meta.seoTitle}</p>
+                </div>
+                <div className="blog-meta-row">
+                  <div className="blog-meta-label">
+                    <span>SEO 설명 (검색 스니펫)</span>
+                    <CopyButton text={meta.seoDescription} label="복사" />
+                  </div>
+                  <p className="blog-meta-value">{meta.seoDescription}</p>
+                </div>
+              </div>
+            </div>
+          )}
 
           <article className="blog-article" style={{ fontFamily: fontCss }}>
             <h3 className="blog-article-title">{articleTitle}</h3>

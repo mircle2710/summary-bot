@@ -8,8 +8,8 @@ import { PET_PROBLEM_FRAMEWORK } from "./types";
 import type { VertexCredentials } from "./request-keys";
 import type { ImageDensity, ImageStyleId, ShortsTopic } from "./shorts";
 import { IMAGE_STYLE_OPTIONS } from "./shorts";
-import type { BlogFontId, BlogToneId, BlogTopic } from "./blog";
-import { BLOG_TONE_OPTIONS } from "./blog";
+import type { BlogFontId, BlogMeta, BlogToneId, BlogTopic } from "./blog";
+import { BLOG_TONE_OPTIONS, slugifyBlogTitle } from "./blog";
 
 const FALLBACK_MODELS = [
   process.env.VERTEX_MODEL,
@@ -529,6 +529,7 @@ export async function writeBlogArticle(params: {
   intro: string;
   paragraphs: Array<{ id: string; heading?: string; text: string; imagePrompt: string }>;
   thumbnailPrompt: string;
+  meta: BlogMeta;
 }> {
   const toneLabel =
     BLOG_TONE_OPTIONS.find((t) => t.id === params.tone)?.label || "친근한 말투";
@@ -539,7 +540,7 @@ export async function writeBlogArticle(params: {
     "요약 내용을 블로그 글로";
 
   const prompt = `한국어 블로그 작가. 완전한 JSON만 반환.
-목표: 블로그 본문을 단락으로 나누고, 단락별 이미지 프롬프트와 썸네일 프롬프트를 만든다.
+목표: 블로그 본문을 단락으로 나누고, 단락별 이미지 프롬프트·썸네일 프롬프트와 SEO/발행용 메타를 만든다.
 
 형식:
 {
@@ -548,7 +549,12 @@ export async function writeBlogArticle(params: {
   "paragraphs":[
     {"id":"p1","heading":"소제목(선택)","text":"본문 단락","imagePrompt":"English visual prompt for this paragraph"}
   ],
-  "thumbnailPrompt":"English thumbnail prompt"
+  "thumbnailPrompt":"English thumbnail prompt",
+  "slug":"url-friendly-slug-in-english-or-romanized-korean",
+  "cardSummary":"검색·카드 노출용 요약 1~2문장",
+  "hashtags":["키워드1","키워드2"],
+  "seoTitle":"검색 결과에 보일 SEO 제목 (50자 내외)",
+  "seoDescription":"검색 스니펫용 설명 (120~155자 권장)"
 }
 
 규칙:
@@ -557,6 +563,10 @@ export async function writeBlogArticle(params: {
 - 글씨체 선택은 화면 표시용이므로 문체에만 톤을 맞출 것 (font=${params.font})
 - paragraphs 4~7개, 각 text는 2~5문장
 - imagePrompt/thumbnailPrompt는 영어, 이미지 안 텍스트/워터마크 금지
+- slug: 소문자, 하이픈, 영문/숫자 위주, 공백·특수문자 없음
+- cardSummary: 본문과 다른 짧은 요약, 클릭을 유도하되 과장 금지
+- hashtags: 3~8개, # 기호 없이 단어만, 한국어 가능
+- seoTitle / seoDescription: 검색 노출용, 핵심 키워드 포함
 - 이모지 금지, JSON 완전하게
 포커스: ${focus}
 
@@ -580,6 +590,11 @@ ${params.keyPoints
     intro?: string;
     paragraphs?: unknown;
     thumbnailPrompt?: string;
+    slug?: string;
+    cardSummary?: string;
+    hashtags?: unknown;
+    seoTitle?: string;
+    seoDescription?: string;
   }>(raw);
 
   const paragraphsRaw = Array.isArray(parsed.paragraphs) ? parsed.paragraphs : [];
@@ -620,13 +635,44 @@ ${params.keyPoints
     throw new Error("블로그 단락을 만들지 못했습니다. 주제를 바꿔 다시 시도해 주세요.");
   }
 
+  const title =
+    parsed.title?.trim() || params.topicTitle || params.title || "블로그 글";
+  const hashtags = Array.isArray(parsed.hashtags)
+    ? parsed.hashtags
+        .map((t) => (typeof t === "string" ? t.trim().replace(/^#/, "") : ""))
+        .filter(Boolean)
+        .slice(0, 10)
+    : [];
+
+  const cardSummary =
+    parsed.cardSummary?.trim() ||
+    parsed.intro?.trim().slice(0, 160) ||
+    params.summary.slice(0, 160);
+  const seoTitle = parsed.seoTitle?.trim() || title.slice(0, 60);
+  const seoDescription =
+    parsed.seoDescription?.trim() || cardSummary.slice(0, 155);
+  const slugRaw = parsed.slug?.trim().toLowerCase().replace(/\s+/g, "-") || "";
+  const slug =
+    slugRaw.replace(/[^a-z0-9가-힣-]/g, "").replace(/-+/g, "-").replace(/^-|-$/g, "") ||
+    slugifyBlogTitle(title);
+
   return {
-    title: parsed.title?.trim() || params.topicTitle || params.title || "블로그 글",
+    title,
     intro: parsed.intro?.trim() || "",
     paragraphs,
     thumbnailPrompt:
       parsed.thumbnailPrompt?.trim() ||
       `Blog thumbnail about ${params.topicTitle || params.title}`,
+    meta: {
+      slug,
+      cardSummary,
+      hashtags:
+        hashtags.length > 0
+          ? hashtags
+          : [],
+      seoTitle,
+      seoDescription,
+    },
   };
 }
 

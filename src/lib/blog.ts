@@ -19,6 +19,36 @@ export type BlogParagraph = {
   error: string | null;
 };
 
+/** 발행·검색용 메타 (본문과 함께 생성) */
+export type BlogMeta = {
+  slug: string;
+  /** 검색 / 카드 노출용 요약 */
+  cardSummary: string;
+  hashtags: string[];
+  seoTitle: string;
+  seoDescription: string;
+};
+
+export function formatHashtagsForCopy(tags: string[]): string {
+  return tags
+    .map((t) => t.trim().replace(/^#/, ""))
+    .filter(Boolean)
+    .map((t) => `#${t}`)
+    .join(" ");
+}
+
+export function slugifyBlogTitle(title: string): string {
+  const base = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]+/gu, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+  return base || "blog-post";
+}
+
 export const BLOG_TONE_OPTIONS: { id: BlogToneId; label: string; hint: string }[] = [
   { id: "friendly", label: "친근한 말투", hint: "보호자 이웃처럼 쉽게" },
   { id: "expert", label: "전문적 말투", hint: "근거 중심, 차분한 설명" },

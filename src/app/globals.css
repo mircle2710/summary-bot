@@ -863,6 +863,52 @@ textarea {
   font-family: var(--font-display);
 }
 
+.blog-meta-box {
+  margin: 0 0 1.1rem;
+  padding: 0.9rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(35, 52, 40, 0.1);
+  background: rgba(248, 250, 247, 0.9);
+}
+
+.blog-meta-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.blog-meta-row {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.blog-meta-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted, #5a6b5e);
+}
+
+.blog-meta-value {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(35, 52, 40, 0.06);
+  line-height: 1.55;
+  word-break: break-word;
+  font-size: 0.92rem;
+}
+
+code.blog-meta-value {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.86rem;
+}
+
 .blog-intro {
   margin: 0 0 1rem;
   line-height: 1.7;
