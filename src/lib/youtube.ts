@@ -2,10 +2,12 @@ import type { ChannelDetails, ChannelVideo, YearlyCount } from "./types";
 
 const YT_API = "https://www.googleapis.com/youtube/v3";
 
-function getApiKey() {
-  const key = process.env.YOUTUBE_API_KEY;
+function resolveApiKey(apiKey?: string) {
+  const key = apiKey?.trim() || process.env.YOUTUBE_API_KEY?.trim();
   if (!key) {
-    throw new Error("YOUTUBE_API_KEY가 설정되지 않았습니다.");
+    throw new Error(
+      "YouTube API 키가 없습니다. 설정에서 키를 입력하거나 서버 환경 변수를 설정해 주세요.",
+    );
   }
   return key;
 }
@@ -62,11 +64,15 @@ export function extractChannelQuery(input: string): {
   return { type: "handle", value: trimmed.replace(/^@/, "") };
 }
 
-async function ytFetch<T>(path: string, params: Record<string, string>): Promise<T> {
-  const key = getApiKey();
+async function ytFetch<T>(
+  path: string,
+  params: Record<string, string>,
+  apiKey?: string,
+): Promise<T> {
+  const key = resolveApiKey(apiKey);
   const search = new URLSearchParams({ ...params, key });
   const res = await fetch(`${YT_API}${path}?${search.toString()}`, {
-    next: { revalidate: 300 },
+    cache: "no-store",
   });
 
   if (!res.ok) {
@@ -122,56 +128,82 @@ function mapChannel(item: NonNullable<ChannelListResponse["items"]>[number]): Ch
   };
 }
 
-export async function resolveChannel(input: string): Promise<ChannelDetails> {
+export async function resolveChannel(
+  input: string,
+  apiKey?: string,
+): Promise<ChannelDetails> {
   const query = extractChannelQuery(input);
   const parts = "snippet,statistics,contentDetails";
 
   if (query.type === "id") {
-    const data = await ytFetch<ChannelListResponse>("/channels", {
-      part: parts,
-      id: query.value,
-    });
+    const data = await ytFetch<ChannelListResponse>(
+      "/channels",
+      {
+        part: parts,
+        id: query.value,
+      },
+      apiKey,
+    );
     if (!data.items?.length) throw new Error("채널을 찾을 수 없습니다.");
     return mapChannel(data.items[0]);
   }
 
   if (query.type === "handle") {
-    const data = await ytFetch<ChannelListResponse>("/channels", {
-      part: parts,
-      forHandle: query.value,
-    });
+    const data = await ytFetch<ChannelListResponse>(
+      "/channels",
+      {
+        part: parts,
+        forHandle: query.value,
+      },
+      apiKey,
+    );
     if (data.items?.length) return mapChannel(data.items[0]);
   }
 
   if (query.type === "username") {
-    const data = await ytFetch<ChannelListResponse>("/channels", {
-      part: parts,
-      forUsername: query.value,
-    });
+    const data = await ytFetch<ChannelListResponse>(
+      "/channels",
+      {
+        part: parts,
+        forUsername: query.value,
+      },
+      apiKey,
+    );
     if (data.items?.length) return mapChannel(data.items[0]);
   }
 
   // fallback: search
-  const search = await ytFetch<{ items?: Array<{ id: { channelId: string } }> }>("/search", {
-    part: "snippet",
-    type: "channel",
-    q: query.value,
-    maxResults: "1",
-  });
+  const search = await ytFetch<{ items?: Array<{ id: { channelId: string } }> }>(
+    "/search",
+    {
+      part: "snippet",
+      type: "channel",
+      q: query.value,
+      maxResults: "1",
+    },
+    apiKey,
+  );
 
   const channelId = search.items?.[0]?.id?.channelId;
   if (!channelId) throw new Error("채널을 찾을 수 없습니다.");
 
-  const data = await ytFetch<ChannelListResponse>("/channels", {
-    part: parts,
-    id: channelId,
-  });
+  const data = await ytFetch<ChannelListResponse>(
+    "/channels",
+    {
+      part: parts,
+      id: channelId,
+    },
+    apiKey,
+  );
   if (!data.items?.length) throw new Error("채널을 찾을 수 없습니다.");
   return mapChannel(data.items[0]);
 }
 
-export async function getChannelById(channelId: string): Promise<ChannelDetails> {
-  return resolveChannel(channelId);
+export async function getChannelById(
+  channelId: string,
+  apiKey?: string,
+): Promise<ChannelDetails> {
+  return resolveChannel(channelId, apiKey);
 }
 
 type PlaylistItemsResponse = {
@@ -190,7 +222,7 @@ type PlaylistItemsResponse = {
 
 export async function getChannelVideos(
   uploadsPlaylistId: string,
-  options: { maxPages?: number; pageSize?: number } = {},
+  options: { maxPages?: number; pageSize?: number; apiKey?: string } = {},
 ): Promise<ChannelVideo[]> {
   const maxPages = options.maxPages ?? 10;
   const pageSize = String(options.pageSize ?? 50);
@@ -205,7 +237,11 @@ export async function getChannelVideos(
     };
     if (pageToken) params.pageToken = pageToken;
 
-    const data = await ytFetch<PlaylistItemsResponse>("/playlistItems", params);
+    const data = await ytFetch<PlaylistItemsResponse>(
+      "/playlistItems",
+      params,
+      options.apiKey,
+    );
     for (const item of data.items || []) {
       if (item.snippet.title === "Private video" || item.snippet.title === "Deleted video") {
         continue;
@@ -239,7 +275,7 @@ export function groupVideosByYear(videos: ChannelVideo[]): YearlyCount[] {
     .sort((a, b) => a.year - b.year);
 }
 
-export async function getVideoMeta(videoId: string) {
+export async function getVideoMeta(videoId: string, apiKey?: string) {
   const data = await ytFetch<{
     items?: Array<{
       id: string;
@@ -251,10 +287,14 @@ export async function getVideoMeta(videoId: string) {
         thumbnails: { high?: { url: string }; medium?: { url: string } };
       };
     }>;
-  }>("/videos", {
-    part: "snippet",
-    id: videoId,
-  });
+  }>(
+    "/videos",
+    {
+      part: "snippet",
+      id: videoId,
+    },
+    apiKey,
+  );
 
   const item = data.items?.[0];
   if (!item) throw new Error("영상을 찾을 수 없습니다.");

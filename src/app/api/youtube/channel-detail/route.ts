@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
+import { getYoutubeApiKey } from "@/lib/request-keys";
 import { getChannelById, getChannelVideos, groupVideosByYear } from "@/lib/youtube";
 
 export async function GET(request: Request) {
   try {
+    const youtubeApiKey = getYoutubeApiKey(request);
     const { searchParams } = new URL(request.url);
     const channelId = searchParams.get("id");
     if (!channelId) {
       return NextResponse.json({ error: "채널 ID가 필요합니다." }, { status: 400 });
     }
 
-    const channel = await getChannelById(channelId);
+    const channel = await getChannelById(channelId, youtubeApiKey);
     if (!channel.uploadsPlaylistId) {
       return NextResponse.json({
         channel,
@@ -21,6 +23,7 @@ export async function GET(request: Request) {
     const videos = await getChannelVideos(channel.uploadsPlaylistId, {
       maxPages: 20,
       pageSize: 50,
+      apiKey: youtubeApiKey,
     });
     const yearly = groupVideosByYear(videos);
 

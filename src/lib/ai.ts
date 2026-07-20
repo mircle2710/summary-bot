@@ -1,12 +1,14 @@
 import OpenAI from "openai";
 import type { AnalysisType } from "./types";
 
-function getClient() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY가 설정되지 않았습니다.");
+function getClient(apiKey?: string) {
+  const key = apiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
+  if (!key) {
+    throw new Error(
+      "OpenAI API 키가 없습니다. 설정에서 키를 입력하거나 서버 환경 변수를 설정해 주세요.",
+    );
   }
-  return new OpenAI({ apiKey });
+  return new OpenAI({ apiKey: key });
 }
 
 export async function summarizeTranscript(params: {
@@ -14,8 +16,9 @@ export async function summarizeTranscript(params: {
   channelTitle: string;
   description: string;
   transcript: string;
+  apiKey?: string;
 }) {
-  const client = getClient();
+  const client = getClient(params.apiKey);
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
   const response = await client.chat.completions.create({
@@ -34,7 +37,7 @@ export async function summarizeTranscript(params: {
 }
 규칙:
 - 원문의 사실과 맥락을 왜곡하지 말 것
-- 교육/양육/훈육 관련 내용이면 실천 관점도 정리
+- 교육/양육/훈육 관련 내용이면 실천 관점으로 정리
 - 불필요한 수사나 이모지 금지
 - 한국어로 작성`,
       },
@@ -101,8 +104,9 @@ export async function analyzeSummary(params: {
   summary: string;
   keyPoints: string[];
   transcript?: string;
+  apiKey?: string;
 }) {
-  const client = getClient();
+  const client = getClient(params.apiKey);
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const prompt = ANALYSIS_PROMPTS[params.type];
 

@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { summarizeTranscript } from "@/lib/ai";
+import { getOpenAIApiKey, getYoutubeApiKey } from "@/lib/request-keys";
 import { fetchTranscript } from "@/lib/transcript";
 import { extractVideoId, getVideoMeta } from "@/lib/youtube";
 
 export async function POST(request: Request) {
   try {
+    const youtubeApiKey = getYoutubeApiKey(request);
+    const openaiApiKey = getOpenAIApiKey(request);
     const body = (await request.json()) as { url?: string };
     if (!body.url?.trim()) {
       return NextResponse.json({ error: "유튜브 URL을 입력해 주세요." }, { status: 400 });
@@ -15,13 +18,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "올바른 유튜브 URL이 아닙니다." }, { status: 400 });
     }
 
-    const meta = await getVideoMeta(videoId);
+    const meta = await getVideoMeta(videoId, youtubeApiKey);
     const transcript = await fetchTranscript(videoId);
     const summarized = await summarizeTranscript({
       title: meta.title,
       channelTitle: meta.channelTitle,
       description: meta.description,
       transcript,
+      apiKey: openaiApiKey,
     });
 
     return NextResponse.json({

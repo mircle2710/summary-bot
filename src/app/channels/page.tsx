@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 import {
   addSavedChannel,
   loadSavedChannels,
@@ -24,7 +25,7 @@ export default function ChannelsPage() {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch("/api/youtube/channel", {
+      const res = await apiFetch("/api/youtube/channel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query }),

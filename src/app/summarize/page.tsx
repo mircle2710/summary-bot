@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 import type { AnalysisResult, AnalysisType, SummaryResult } from "@/lib/types";
 
 type SummarizeResponse = SummaryResult & {
@@ -36,7 +37,7 @@ export default function SummarizePage() {
     setResult(null);
 
     try {
-      const res = await fetch("/api/summarize", {
+      const res = await apiFetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url }),
@@ -60,7 +61,7 @@ export default function SummarizePage() {
 
     setAnalyzing(type);
     try {
-      const res = await fetch("/api/analyze", {
+      const res = await apiFetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

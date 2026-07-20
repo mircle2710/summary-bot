@@ -37,5 +37,7 @@ http://localhost:3000 에서 확인합니다.
 
 ## 참고
 
-- 채널 목록은 브라우저 `localStorage`에 저장됩니다.
+- 우측 상단 **설정**에서 YouTube / OpenAI API 키를 입력할 수 있습니다. 키는 브라우저 `localStorage`에만 저장됩니다.
+- 채널 목록도 브라우저 `localStorage`에 저장됩니다.
 - 요약은 영상의 자막(캡션)이 있어야 동작합니다.
+- 설정 키가 없으면 서버 환경 변수(`YOUTUBE_API_KEY`, `OPENAI_API_KEY`)를 사용합니다.

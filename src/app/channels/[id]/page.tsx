@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 import { formatCount } from "@/lib/format";
 import type { ChannelDetails, ChannelVideo, YearlyCount } from "@/lib/types";
 
@@ -28,7 +29,7 @@ export default function ChannelDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/youtube/channel-detail?id=${channelId}`);
+        const res = await apiFetch(`/api/youtube/channel-detail?id=${channelId}`);
         const json = (await res.json()) as DetailResponse;
         if (!res.ok) throw new Error(json.error || "채널 정보를 불러오지 못했습니다.");
         if (!cancelled) setData(json);
