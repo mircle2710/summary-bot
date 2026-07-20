@@ -16,10 +16,19 @@ export async function summarizeTranscript(params: {
   channelTitle: string;
   description: string;
   transcript: string;
+  source?: "caption" | "metadata";
   apiKey?: string;
 }) {
   const client = getClient(params.apiKey);
   const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  const source = params.source || "caption";
+
+  const sourceRule =
+    source === "metadata"
+      ? `- 이 요청은 자막이 없어 제목과 영상 설명만으로 정리합니다.
+- 설명에 없는 내용을 지어내지 말고, 정보가 부족하면 그 사실을 명시하세요.
+- 요약 첫머리에 "자막이 없어 제목·설명 기준으로 정리했습니다."를 한 문장 포함하세요.`
+      : `- 자막을 기준으로 내용을 정리하세요.`;
 
   const response = await client.chat.completions.create({
     model,
@@ -39,16 +48,17 @@ export async function summarizeTranscript(params: {
 - 원문의 사실과 맥락을 왜곡하지 말 것
 - 교육/양육/훈육 관련 내용이면 실천 관점으로 정리
 - 불필요한 수사나 이모지 금지
-- 한국어로 작성`,
+- 한국어로 작성
+${sourceRule}`,
       },
       {
         role: "user",
         content: `영상 제목: ${params.title}
 채널: ${params.channelTitle}
 설명:
-${params.description.slice(0, 1500)}
+${params.description.slice(0, 4000)}
 
-자막/트랜스크립트:
+${source === "caption" ? "자막/트랜스크립트:" : "제목·설명 기반 원문:"}
 ${params.transcript.slice(0, 50000)}`,
       },
     ],

@@ -8,6 +8,7 @@ type SummarizeResponse = SummaryResult & {
   channelTitle?: string;
   thumbnailUrl?: string;
   transcript?: string;
+  source?: "caption" | "metadata";
   error?: string;
 };
 
@@ -92,8 +93,9 @@ export default function SummarizePage() {
         <div>
           <h1 className="section-title">영상 요약</h1>
           <p className="section-desc">
-            유튜브 URL을 입력하면 자막을 바탕으로 핵심 내용을 구조적으로 정리합니다.
-            요약 후 사건·원인·해결책&훈육으로 분리할 수 있습니다.
+            유튜브 URL을 입력하면 자막(또는 자동자막)을 바탕으로 핵심 내용을 정리합니다.
+            자막이 없으면 제목·설명을 기준으로 요약합니다. 요약 후 사건·원인·해결책&훈육으로
+            분리할 수 있습니다.
           </p>
         </div>
       </div>
@@ -161,6 +163,12 @@ export default function SummarizePage() {
             <h3 style={{ margin: "0 0 0.75rem", fontFamily: "var(--font-display)" }}>
               요약 정리
             </h3>
+            {result.source === "metadata" && (
+              <div className="notice-box">
+                자막을 찾지 못해 제목·영상 설명 기준으로 요약했습니다. 내용 정확도는
+                자막 기반보다 낮을 수 있습니다.
+              </div>
+            )}
             <div className="prose-block">{result.summary}</div>
             {result.keyPoints?.length > 0 && (
               <>

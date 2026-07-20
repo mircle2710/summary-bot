@@ -43,6 +43,7 @@ export type SummaryResult = {
   keyPoints: string[];
   videoId: string;
   videoUrl: string;
+  source?: "caption" | "metadata";
 };
 
 export type AnalysisType = "incident" | "cause" | "solution";
