@@ -32,7 +32,10 @@ export function formatGeminiError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
 
   if (/429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message)) {
-    return "Gemini 무료 사용량(쿼터)을 초과했습니다. 잠시 후 다시 시도하거나, Google AI Studio에서 결제/할당량을 확인해 주세요.";
+    if (/free_tier|free tier|무료/i.test(message)) {
+      return "이 API 키가 아직 무료 등급으로 인식되고 있습니다. 설정에서 My First Project(결제/Tier 1) 키인지 확인하고, 업그레이드 직후라면 1~2분 뒤 다시 시도해 주세요.";
+    }
+    return "Gemini 요청 한도(분당/일일 제한)에 걸렸습니다. 유료/체험이어도 잠시 제한될 수 있으니 20~60초 뒤 다시 시도해 주세요. 크레딧이 있어도 단시간 요청이 많으면 같은 오류가 납니다.";
   }
   if (/401|403|API_KEY_INVALID|API key not valid/i.test(message)) {
     return "Gemini API 키가 올바르지 않습니다. 설정에서 키를 다시 확인해 주세요.";
@@ -55,6 +58,10 @@ function isRetryableModelError(error: unknown) {
   );
 }
 
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function generateJson(params: {
   apiKey?: string;
   temperature: number;
@@ -65,21 +72,30 @@ async function generateJson(params: {
   let lastError: unknown;
 
   for (const modelName of FALLBACK_MODELS) {
-    try {
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig: {
-          temperature: params.temperature,
-          responseMimeType: "application/json",
-          maxOutputTokens: 2048,
-        },
-      });
-      const result = await model.generateContent(params.prompt);
-      return result.response.text() || "{}";
-    } catch (error) {
-      lastError = error;
-      if (!isRetryableModelError(error)) {
-        throw new Error(formatGeminiError(error));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            temperature: params.temperature,
+            responseMimeType: "application/json",
+            maxOutputTokens: 2048,
+          },
+        });
+        const result = await model.generateContent(params.prompt);
+        return result.response.text() || "{}";
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        const is429 = /429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message);
+        if (is429 && attempt === 0) {
+          await sleep(1500);
+          continue;
+        }
+        if (!isRetryableModelError(error)) {
+          throw new Error(formatGeminiError(error));
+        }
+        break;
       }
     }
   }
