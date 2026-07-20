@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
-import { formatGeminiError, summarizeTranscript } from "@/lib/ai";
-import { getGeminiApiKey, getYoutubeApiKey } from "@/lib/request-keys";
+import { formatVertexError, summarizeTranscript } from "@/lib/ai";
+import { getVertexCredentials, getYoutubeApiKey } from "@/lib/request-keys";
 import { buildMetadataTranscript, fetchTranscript } from "@/lib/transcript";
 import { extractVideoId, getVideoMeta } from "@/lib/youtube";
 
 function statusFromMessage(message: string) {
-  if (/API 키/i.test(message)) return 401;
-  if (/쿼터/i.test(message)) return 429;
+  if (/서비스 계정|프로젝트 ID|인증/i.test(message)) return 401;
+  if (/한도|quota|429/i.test(message)) return 429;
   return 500;
 }
 
 export async function POST(request: Request) {
   try {
     const youtubeApiKey = getYoutubeApiKey(request);
-    const geminiApiKey = getGeminiApiKey(request);
+    const credentials = getVertexCredentials(request);
     const body = (await request.json()) as { url?: string };
     if (!body.url?.trim()) {
       return NextResponse.json({ error: "유튜브 URL을 입력해 주세요." }, { status: 400 });
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
       description: meta.description,
       transcript,
       source,
-      apiKey: geminiApiKey,
+      credentials,
     });
 
     return NextResponse.json({
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
       source,
     });
   } catch (error) {
-    const message = formatGeminiError(error);
+    const message = formatVertexError(error);
     return NextResponse.json({ error: message }, { status: statusFromMessage(message) });
   }
 }

@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
-import { analyzeSummary, formatGeminiError } from "@/lib/ai";
-import { getGeminiApiKey } from "@/lib/request-keys";
+import { analyzeSummary, formatVertexError } from "@/lib/ai";
+import { getVertexCredentials } from "@/lib/request-keys";
 import type { AnalysisType } from "@/lib/types";
 
 const VALID: AnalysisType[] = ["incident", "cause", "solution"];
 
 function statusFromMessage(message: string) {
-  if (/API 키/i.test(message)) return 401;
-  if (/쿼터/i.test(message)) return 429;
+  if (/서비스 계정|프로젝트 ID|인증/i.test(message)) return 401;
+  if (/한도|quota|429/i.test(message)) return 429;
   return 500;
 }
 
 export async function POST(request: Request) {
   try {
-    const geminiApiKey = getGeminiApiKey(request);
+    const credentials = getVertexCredentials(request);
     const body = (await request.json()) as {
       type?: AnalysisType;
       title?: string;
@@ -35,12 +35,12 @@ export async function POST(request: Request) {
       summary: body.summary,
       keyPoints: body.keyPoints || [],
       transcript: body.transcript,
-      apiKey: geminiApiKey,
+      credentials,
     });
 
     return NextResponse.json({ result });
   } catch (error) {
-    const message = formatGeminiError(error);
+    const message = formatVertexError(error);
     return NextResponse.json({ error: message }, { status: statusFromMessage(message) });
   }
 }

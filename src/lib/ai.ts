@@ -1,21 +1,21 @@
+import { GoogleAuth, type JWTInput } from "google-auth-library";
 import type { AnalysisType } from "./types";
+import type { VertexCredentials } from "./request-keys";
 
 const FALLBACK_MODELS = [
-  process.env.GEMINI_MODEL,
-  "gemini-2.5-flash",
+  process.env.VERTEX_MODEL,
+  "gemini-2.0-flash-001",
   "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
+  "gemini-2.5-flash",
 ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
 
-function resolveApiKey(apiKey?: string) {
-  const key = apiKey?.trim() || process.env.GEMINI_API_KEY?.trim();
-  if (!key) {
-    throw new Error(
-      "Gemini API 키가 없습니다. 설정에서 키를 입력하거나 서버 환경 변수를 설정해 주세요.",
-    );
-  }
-  return key;
-}
+type AccessCache = {
+  key: string;
+  token: string;
+  expiresAt: number;
+};
+
+let accessCache: AccessCache | null = null;
 
 function parseJson<T>(raw: string): T {
   const cleaned = raw
@@ -26,40 +26,56 @@ function parseJson<T>(raw: string): T {
   return JSON.parse(cleaned) as T;
 }
 
-function extractQuotaMetric(message: string): string | null {
-  const match = message.match(/quotaMetric["']?\s*[:=]\s*["']?([a-zA-Z0-9_./-]+)/i);
-  return match?.[1] || null;
-}
-
-export function formatGeminiError(error: unknown): string {
+export function formatVertexError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const metric = extractQuotaMetric(message);
 
-  if (/429|Too Many Requests|quota|RESOURCE_EXHAUSTED/i.test(message)) {
-    if (/free_tier|FreeTier|generate_content_free_tier/i.test(message) || /free_tier/i.test(metric || "")) {
-      return [
-        "이 키는 아직 무료 한도(free_tier)로 인식되고 있습니다. (Tier 1로 보여도 API는 예전 키를 무료로 취급하는 경우가 많습니다.)",
-        "해결: Google Cloud Console → API 및 서비스 → 사용자 인증 정보에서 My First Project로 '새 API 키'를 만든 뒤, 설정에 그 새 키를 넣고 저장하세요.",
-        "업그레이드 전에 만든 AI Studio 키는 무료 한도에 남을 수 있습니다.",
-      ].join(" ");
-    }
-    return "Gemini 요청 한도(분당/일일)에 걸렸습니다. 1~2분 기다린 뒤 한 번만 다시 시도해 주세요.";
+  if (/PERMISSION_DENIED|403/i.test(message)) {
+    return "Vertex AI 권한이 없습니다. 서비스 계정에 'Vertex AI User' 역할을 부여하고, Vertex AI API를 사용 설정했는지 확인해 주세요.";
   }
-  if (/401|403|API_KEY_INVALID|API key not valid/i.test(message)) {
-    return "Gemini API 키가 올바르지 않습니다. 설정에서 키를 다시 확인해 주세요.";
+  if (/NOT_FOUND|404|was not found/i.test(message)) {
+    return "Vertex 모델/프로젝트를 찾지 못했습니다. 프로젝트 ID·리전(us-central1)·모델명을 확인해 주세요.";
   }
-  if (/404|not found|is not found for API version/i.test(message)) {
-    return "사용할 수 있는 Gemini 모델을 찾지 못했습니다. 설정에서 키를 저장한 뒤 다시 시도해 주세요.";
+  if (/UNAUTHENTICATED|401|invalid_grant|invalid_client/i.test(message)) {
+    return "서비스 계정 인증에 실패했습니다. JSON 키 전체가 올바른지 확인해 주세요.";
+  }
+  if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+    return "Vertex AI 요청 한도에 걸렸습니다. 1~2분 뒤 다시 시도해 주세요.";
+  }
+  if (/billing|결제|CREDIT|credit/i.test(message)) {
+    return "결제/크레딧 문제입니다. Cloud Console에서 해당 프로젝트 결제와 Vertex AI API 사용 설정을 확인해 주세요.";
   }
 
-  const short = message
-    .replace(/\[GoogleGenerativeAI Error\]:\s*/i, "")
-    .replace(/\s*\[\s*\{\s*"error"[\s\S]*$/, "")
-    .trim();
-  return short.slice(0, 320) || "Gemini 요청에 실패했습니다.";
+  const short = message.replace(/\s+/g, " ").trim();
+  return short.slice(0, 360) || "Vertex AI 요청에 실패했습니다.";
 }
 
-type GeminiResponse = {
+async function getAccessToken(serviceAccountJson: string): Promise<string> {
+  const cacheKey = serviceAccountJson.slice(0, 120);
+  if (accessCache && accessCache.key === cacheKey && accessCache.expiresAt > Date.now() + 60_000) {
+    return accessCache.token;
+  }
+
+  const credentials = JSON.parse(serviceAccountJson) as JWTInput;
+  const auth = new GoogleAuth({
+    credentials,
+    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+  });
+  const client = await auth.getClient();
+  const tokenResponse = await client.getAccessToken();
+  const token = typeof tokenResponse === "string" ? tokenResponse : tokenResponse?.token;
+  if (!token) {
+    throw new Error("Vertex access token을 발급받지 못했습니다.");
+  }
+
+  accessCache = {
+    key: cacheKey,
+    token,
+    expiresAt: Date.now() + 50 * 60 * 1000,
+  };
+  return token;
+}
+
+type VertexResponse = {
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
   }>;
@@ -67,21 +83,25 @@ type GeminiResponse = {
     code?: number;
     message?: string;
     status?: string;
-    details?: unknown;
   };
 };
 
-async function callGeminiOnce(params: {
-  apiKey: string;
+async function callVertexOnce(params: {
+  credentials: VertexCredentials;
   model: string;
   temperature: number;
   prompt: string;
 }): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(params.model)}:generateContent?key=${encodeURIComponent(params.apiKey)}`;
+  const token = await getAccessToken(params.credentials.serviceAccountJson);
+  const { projectId, location } = params.credentials;
+  const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(params.model)}:generateContent`;
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
     cache: "no-store",
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: params.prompt }] }],
@@ -93,33 +113,30 @@ async function callGeminiOnce(params: {
     }),
   });
 
-  const data = (await res.json()) as GeminiResponse;
-
+  const data = (await res.json()) as VertexResponse;
   if (!res.ok || data.error) {
-    const detail = data.error ? JSON.stringify(data.error) : await Promise.resolve("");
-    const message = data.error?.message || detail || `HTTP ${res.status}`;
+    const message = data.error?.message || `HTTP ${res.status}`;
     throw new Error(message);
   }
 
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
   if (!text.trim()) {
-    throw new Error("Gemini 응답이 비어 있습니다.");
+    throw new Error("Vertex AI 응답이 비어 있습니다.");
   }
   return text;
 }
 
 async function generateJson(params: {
-  apiKey?: string;
+  credentials: VertexCredentials;
   temperature: number;
   prompt: string;
 }) {
-  const key = resolveApiKey(params.apiKey);
   let lastError: unknown;
 
   for (const modelName of FALLBACK_MODELS) {
     try {
-      return await callGeminiOnce({
-        apiKey: key,
+      return await callVertexOnce({
+        credentials: params.credentials,
         model: modelName,
         temperature: params.temperature,
         prompt: params.prompt,
@@ -127,30 +144,24 @@ async function generateJson(params: {
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      // 한도 초과면 다른 모델로 넘기지 않음 (요청 낭비 방지)
-      if (/429|Too Many Requests|quota|RESOURCE_EXHAUSTED|free_tier/i.test(message)) {
-        throw new Error(formatGeminiError(error));
+      if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+        throw new Error(formatVertexError(error));
       }
-      // 모델 없음만 다음 후보로
-      if (!/404|not found|is not found for API version/i.test(message)) {
-        throw new Error(formatGeminiError(error));
+      if (!/404|NOT_FOUND|was not found|is not supported/i.test(message)) {
+        throw new Error(formatVertexError(error));
       }
     }
   }
 
-  throw new Error(formatGeminiError(lastError));
+  throw new Error(formatVertexError(lastError));
 }
 
-/** 키가 유료(Tier)로 동작하는지 아주 작은 요청으로 확인 */
-export async function pingGemini(apiKey?: string) {
-  const key = resolveApiKey(apiKey);
-  const models = FALLBACK_MODELS;
+export async function pingVertex(credentials: VertexCredentials) {
   let lastError: unknown;
-
-  for (const model of models) {
+  for (const model of FALLBACK_MODELS) {
     try {
-      const raw = await callGeminiOnce({
-        apiKey: key,
+      const raw = await callVertexOnce({
+        credentials,
         model,
         temperature: 0,
         prompt: 'JSON만 답하세요: {"ok":true}',
@@ -160,16 +171,12 @@ export async function pingGemini(apiKey?: string) {
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      if (/429|quota|RESOURCE_EXHAUSTED|free_tier/i.test(message)) {
-        throw new Error(formatGeminiError(error));
-      }
-      if (!/404|not found/i.test(message)) {
-        throw new Error(formatGeminiError(error));
+      if (!/404|NOT_FOUND|was not found|is not supported/i.test(message)) {
+        throw new Error(formatVertexError(error));
       }
     }
   }
-
-  throw new Error(formatGeminiError(lastError));
+  throw new Error(formatVertexError(lastError));
 }
 
 export async function summarizeTranscript(params: {
@@ -178,17 +185,15 @@ export async function summarizeTranscript(params: {
   description: string;
   transcript: string;
   source?: "caption" | "metadata";
-  apiKey?: string;
+  credentials: VertexCredentials;
 }) {
   const source = params.source || "caption";
-
   const sourceRule =
     source === "metadata"
       ? `- 자막이 없어 제목·설명만 사용. 없는 내용은 지어내지 말 것.
 - 요약 첫머리에 "자막이 없어 제목·설명 기준으로 정리했습니다." 포함.`
       : `- 자막을 기준으로 정리.`;
 
-  // 토큰(한도) 소모 줄이기: 설명/자막을 짧게 자름
   const prompt = `한국어 요약 전문가. JSON만 반환.
 형식: {"summary":"3~5문단","keyPoints":["5~8개"]}
 규칙: 사실 왜곡 금지, 훈육/양육이면 실천 중심으로, 이모지 금지
@@ -203,7 +208,7 @@ ${source === "caption" ? "자막:" : "원문:"}
 ${params.transcript.slice(0, 8000)}`;
 
   const raw = await generateJson({
-    apiKey: params.apiKey,
+    credentials: params.credentials,
     temperature: 0.3,
     prompt,
   });
@@ -241,10 +246,9 @@ export async function analyzeSummary(params: {
   summary: string;
   keyPoints: string[];
   transcript?: string;
-  apiKey?: string;
+  credentials: VertexCredentials;
 }) {
   const promptInfo = ANALYSIS_PROMPTS[params.type];
-
   const prompt = `한국어 분석. JSON만 반환.
 ${promptInfo.instruction}
 
@@ -259,7 +263,7 @@ ${params.keyPoints
 ${params.transcript ? `참고:\n${params.transcript.slice(0, 3000)}` : ""}`;
 
   const raw = await generateJson({
-    apiKey: params.apiKey,
+    credentials: params.credentials,
     temperature: 0.2,
     prompt,
   });
@@ -271,3 +275,6 @@ ${params.transcript ? `참고:\n${params.transcript.slice(0, 3000)}` : ""}`;
     items: parsed.items || [],
   };
 }
+
+/** @deprecated use formatVertexError */
+export const formatGeminiError = formatVertexError;

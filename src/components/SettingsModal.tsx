@@ -19,13 +19,38 @@ function SecretField({
   value,
   onChange,
   placeholder,
+  multiline,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  multiline?: boolean;
 }) {
   const [visible, setVisible] = useState(false);
+
+  if (multiline) {
+    return (
+      <label className="field">
+        <span>{label}</span>
+        <textarea
+          className="input"
+          rows={6}
+          autoComplete="off"
+          spellCheck={false}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          style={{
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: "0.82rem",
+            resize: "vertical",
+            width: "100%",
+          }}
+        />
+      </label>
+    );
+  }
 
   return (
     <label className="field">
@@ -43,7 +68,7 @@ function SecretField({
           type="button"
           className="btn btn-ghost secret-toggle"
           onClick={() => setVisible((prev) => !prev)}
-          aria-label={visible ? "API 키 숨기기" : "API 키 보기"}
+          aria-label={visible ? "숨기기" : "보기"}
         >
           {visible ? "숨기기" : "보기"}
         </button>
@@ -55,7 +80,9 @@ function SecretField({
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [settings, setSettings] = useState<ApiSettings>({
     youtubeApiKey: "",
-    geminiApiKey: "",
+    vertexProjectId: "",
+    vertexLocation: "us-central1",
+    vertexServiceAccountJson: "",
   });
   const [saved, setSaved] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -91,7 +118,12 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   function handleClear() {
     clearApiSettings();
-    setSettings({ youtubeApiKey: "", geminiApiKey: "" });
+    setSettings({
+      youtubeApiKey: "",
+      vertexProjectId: "",
+      vertexLocation: "us-central1",
+      vertexServiceAccountJson: "",
+    });
     setSaved(false);
     setTestMessage(null);
     setTestOk(null);
@@ -103,16 +135,16 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     setTestMessage(null);
     setTestOk(null);
     try {
-      const res = await apiFetch("/api/gemini/ping", { method: "POST" });
+      const res = await apiFetch("/api/vertex/ping", { method: "POST" });
       const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || "키 테스트에 실패했습니다.");
+        throw new Error(data.error || "Vertex 연결 테스트에 실패했습니다.");
       }
       setTestOk(true);
       setTestMessage(data.message || "연결 성공");
     } catch (err) {
       setTestOk(false);
-      setTestMessage(err instanceof Error ? err.message : "키 테스트에 실패했습니다.");
+      setTestMessage(err instanceof Error ? err.message : "테스트에 실패했습니다.");
     } finally {
       setTesting(false);
     }
@@ -126,6 +158,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         aria-modal="true"
         aria-labelledby="settings-title"
         onClick={(e) => e.stopPropagation()}
+        style={{ width: "min(560px, 100%)" }}
       >
         <div className="modal-head">
           <h2 id="settings-title">설정</h2>
@@ -135,14 +168,18 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         </div>
 
         <p className="muted" style={{ marginTop: 0 }}>
-          API 키는 이 브라우저에만 저장됩니다. Tier 1로 업그레이드했다면{" "}
-          <strong>업그레이드 이후에 새로 만든</strong> Gemini 키를 넣어야 합니다.
+          요약은 <strong>Vertex AI</strong>로 실행되어 Google Cloud 체험 크레딧(~46만 원)을
+          사용할 수 있습니다. AI Studio Gemini 선불 키는 더 이상 쓰지 않습니다.
         </p>
 
         <div className="notice-box" style={{ marginTop: "0.75rem" }}>
-          쇼츠 프로젝트처럼 많이 쓰려면: Google Cloud Console → API 및 서비스 → 사용자
-          인증 정보 → <strong>API 키 만들기</strong>(My First Project) → 여기 붙여넣기 →
-          키 테스트
+          1) Cloud Console에서 <strong>Vertex AI API</strong> 사용 설정
+          <br />
+          2) 서비스 계정 생성 → 역할 <strong>Vertex AI User</strong>
+          <br />
+          3) 키(JSON) 만들기 → 아래 칸에 전체 붙여넣기
+          <br />
+          4) 프로젝트 ID는 My First Project ID 입력 후 <strong>키 테스트</strong>
         </div>
 
         <form onSubmit={handleSave} className="settings-form">
@@ -155,13 +192,39 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             placeholder="AIza..."
           />
 
+          <label className="field">
+            <span>Vertex 프로젝트 ID</span>
+            <input
+              className="input"
+              value={settings.vertexProjectId}
+              onChange={(e) =>
+                setSettings((prev) => ({ ...prev, vertexProjectId: e.target.value }))
+              }
+              placeholder="예: project-a0cb46ec-3925-43ad-958"
+              required
+            />
+          </label>
+
+          <label className="field">
+            <span>Vertex 리전</span>
+            <input
+              className="input"
+              value={settings.vertexLocation}
+              onChange={(e) =>
+                setSettings((prev) => ({ ...prev, vertexLocation: e.target.value }))
+              }
+              placeholder="us-central1"
+            />
+          </label>
+
           <SecretField
-            label="Gemini API 키 (업그레이드 후 새로 만든 키)"
-            value={settings.geminiApiKey}
-            onChange={(geminiApiKey) =>
-              setSettings((prev) => ({ ...prev, geminiApiKey }))
+            label="서비스 계정 JSON 키"
+            value={settings.vertexServiceAccountJson}
+            onChange={(vertexServiceAccountJson) =>
+              setSettings((prev) => ({ ...prev, vertexServiceAccountJson }))
             }
-            placeholder="AIza... (Cloud Console에서 새로 발급)"
+            placeholder='{"type":"service_account","project_id":"..."}'
+            multiline
           />
 
           <div className="form-row" style={{ marginTop: "0.35rem" }}>
@@ -172,7 +235,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               type="button"
               className="btn btn-secondary"
               onClick={handleTest}
-              disabled={testing || !settings.geminiApiKey.trim()}
+              disabled={
+                testing ||
+                !settings.vertexProjectId.trim() ||
+                !settings.vertexServiceAccountJson.trim()
+              }
             >
               {testing ? "테스트 중…" : "키 테스트"}
             </button>
@@ -183,12 +250,15 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
           {saved && (
             <p className="muted" style={{ margin: "0.35rem 0 0" }}>
-              저장되었습니다. 키 테스트로 연결을 확인해 보세요.
+              저장되었습니다. 키 테스트로 Vertex 연결을 확인해 보세요.
             </p>
           )}
 
           {testMessage && (
-            <div className={testOk ? "notice-box" : "error-box"} style={{ marginTop: "0.75rem" }}>
+            <div
+              className={testOk ? "notice-box" : "error-box"}
+              style={{ marginTop: "0.75rem" }}
+            >
               {testMessage}
             </div>
           )}
