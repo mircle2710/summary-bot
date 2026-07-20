@@ -790,6 +790,28 @@ textarea {
   font-size: 0.72rem;
 }
 
+.expert-preview {
+  width: min(320px, 100%);
+  margin: 0.35rem 0 0.85rem;
+  border-radius: 12px;
+  object-fit: cover;
+  display: block;
+}
+
+.ref-list {
+  margin: 0.75rem 0 0;
+  padding-left: 1.15rem;
+  display: grid;
+  gap: 0.45rem;
+  line-height: 1.55;
+}
+
+.ref-list a {
+  color: var(--leaf-deep);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .subtitle-size-preview {
   display: grid;
   gap: 0.45rem;

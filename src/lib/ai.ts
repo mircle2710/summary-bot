@@ -695,5 +695,278 @@ ${params.transcript ? `참고:\n${params.transcript.slice(0, 3000)}` : ""}`;
   };
 }
 
+type GroundingChunk = {
+  web?: { uri?: string; title?: string };
+};
+
+type GroundedVertexResponse = {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+    groundingMetadata?: {
+      groundingChunks?: GroundingChunk[];
+      webSearchQueries?: string[];
+    };
+    finishReason?: string;
+  }>;
+  error?: { message?: string };
+};
+
+function extractGroundingReferences(
+  chunks: GroundingChunk[] | undefined,
+): Array<{ title: string; url: string }> {
+  if (!chunks?.length) return [];
+  const seen = new Set<string>();
+  const refs: Array<{ title: string; url: string }> = [];
+  for (const chunk of chunks) {
+    const url = chunk.web?.uri?.trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    refs.push({
+      title: chunk.web?.title?.trim() || url,
+      url,
+    });
+  }
+  return refs.slice(0, 12);
+}
+
+export async function answerVeterinaryExpert(params: {
+  question: string;
+  imageBase64: string;
+  mimeType: string;
+  credentials: VertexCredentials;
+}): Promise<{
+  title: string;
+  answer: string;
+  keyPoints: string[];
+  references: Array<{ title: string; url: string }>;
+  shortsTopics: ShortsTopic[];
+  disclaimer: string;
+}> {
+  const question = params.question.trim();
+  if (!question) throw new Error("질문을 입력해 주세요.");
+  if (!params.imageBase64.trim()) throw new Error("이미지를 업로드해 주세요.");
+
+  const token = await getAccessToken(params.credentials.serviceAccountJson);
+  const { projectId, location } = params.credentials;
+  const mimeType = params.mimeType || "image/jpeg";
+  const rawBase64 = params.imageBase64.replace(/^data:[^;]+;base64,/, "");
+
+  const prompt = `당신은 수의학 지식을 바탕으로 보호자에게 설명하는 전문 어시스턴트입니다.
+업로드된 이미지와 질문을 보고, 가능한 한 아래 출처 유형을 우선해 답하세요.
+- 수의학 학술지 / peer-reviewed 논문
+- 수의학회·대학 동물병원·공신력 있는 수의학 기관의 공식 안내
+- 면허 수의사/전문의가 공식 매체에 남긴 권위 있는 설명
+
+규칙:
+1) 한국어로 자세히 답변. 과장·공포 마케팅 금지.
+2) 진단/처방처럼 단정하지 말고, 가능한 소견과 추가 확인이 필요한 점을 구분.
+3) 응급 가능성이 있으면 즉시 동물병원 방문을 권고.
+4) Google 검색 결과를 활용해 근거를 찾고, 답변에 핵심을 정리.
+5) 이모지 금지.
+
+보호자 질문:
+${question.slice(0, 2000)}`;
+
+  let lastError: unknown;
+  let groundedText = "";
+  let groundingRefs: Array<{ title: string; url: string }> = [];
+
+  for (const modelName of FALLBACK_MODELS) {
+    try {
+      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(modelName)}:generateContent`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: prompt },
+                {
+                  inlineData: {
+                    mimeType,
+                    data: rawBase64,
+                  },
+                },
+              ],
+            },
+          ],
+          tools: [{ googleSearch: {} }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 4096,
+          },
+        }),
+      });
+      const data = (await res.json()) as GroundedVertexResponse;
+      if (!res.ok || data.error) {
+        throw new Error(data.error?.message || `HTTP ${res.status}`);
+      }
+      groundedText =
+        data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ||
+        "";
+      if (!groundedText.trim()) {
+        throw new Error("전문 답변 응답이 비어 있습니다.");
+      }
+      groundingRefs = extractGroundingReferences(
+        data.candidates?.[0]?.groundingMetadata?.groundingChunks,
+      );
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+        throw new Error(formatVertexError(error));
+      }
+      // If googleSearch tool unsupported, retry without tools once at end
+      if (!/404|NOT_FOUND|was not found|is not supported|INVALID_ARGUMENT/i.test(message)) {
+        // continue trying other models for tool issues too
+      }
+    }
+  }
+
+  if (!groundedText.trim()) {
+    // Fallback without grounding tool
+    for (const modelName of FALLBACK_MODELS) {
+      try {
+        const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(modelName)}:generateContent`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    text: `${prompt}
+
+추가: 검색 도구를 쓸 수 없으니, 알고 있는 공신력 있는 수의학 출처(학회/대학/논문명)를 명시하고, 가능하면 공식 URL도 함께 제안하세요.`,
+                  },
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: rawBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 4096,
+            },
+          }),
+        });
+        const data = (await res.json()) as GroundedVertexResponse;
+        if (!res.ok || data.error) {
+          throw new Error(data.error?.message || `HTTP ${res.status}`);
+        }
+        groundedText =
+          data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ||
+          "";
+        if (groundedText.trim()) {
+          lastError = null;
+          break;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+
+  if (!groundedText.trim()) {
+    throw new Error(formatVertexError(lastError));
+  }
+
+  const structurePrompt = `아래 수의학 전문 답변을 JSON으로만 재구성하세요.
+형식:
+{
+  "title":"짧은 제목",
+  "answer":"보호자에게 보여줄 자세한 본문(문단)",
+  "keyPoints":["핵심1","핵심2","핵심3","핵심4","핵심5"],
+  "references":[{"title":"출처명","url":"https://..."}],
+  "shortsTopics":[
+    {"id":"t1","title":"숏츠 주제","angle":"왜 숏츠로 좋은지"}
+  ],
+  "disclaimer":"수의사 대면 진료를 대체하지 않는다는 한 줄 고지"
+}
+규칙:
+- answer는 원문 내용을 충실히 유지(한국어)
+- references는 원문에 나온 URL/출처 + 제공된 검색 출처를 합쳐 최대 8개. url이 없으면 공식 사이트를 추정하지 말고 title만 두고 url은 빈 문자열
+- shortsTopics 3~5개 (이 답변으로 만들 숏츠 각도)
+- 이모지 금지, JSON 완전하게
+
+검색/그라운딩 출처:
+${groundingRefs.map((r) => `- ${r.title}: ${r.url}`).join("\n") || "(없음)"}
+
+원문 답변:
+${groundedText.slice(0, 6000)}`;
+
+  const structuredRaw = await generateJson({
+    credentials: params.credentials,
+    temperature: 0.2,
+    prompt: structurePrompt,
+    maxOutputTokens: 4096,
+  });
+  const parsed = parseJson<{
+    title?: string;
+    answer?: string;
+    keyPoints?: string[];
+    references?: Array<{ title?: string; url?: string }>;
+    shortsTopics?: unknown;
+    disclaimer?: string;
+  }>(structuredRaw);
+
+  const modelRefs = Array.isArray(parsed.references)
+    ? parsed.references
+        .map((r) => ({
+          title: r?.title?.trim() || "",
+          url: r?.url?.trim() || "",
+        }))
+        .filter((r) => r.title || r.url)
+    : [];
+
+  const mergedRefs = [...groundingRefs, ...modelRefs]
+    .filter((r) => r.url || r.title)
+    .filter((r, i, arr) => {
+      const key = r.url || r.title;
+      return arr.findIndex((x) => (x.url || x.title) === key) === i;
+    })
+    .slice(0, 10);
+
+  const topics = normalizeTopics(parsed.shortsTopics);
+  const fallbackTopics =
+    topics.length > 0
+      ? topics
+      : await suggestShortsTopics({
+          title: parsed.title || "전문 답변",
+          summary: parsed.answer || groundedText,
+          keyPoints: parsed.keyPoints || [],
+          credentials: params.credentials,
+        });
+
+  return {
+    title: parsed.title?.trim() || "전문 답변",
+    answer: parsed.answer?.trim() || groundedText.trim(),
+    keyPoints: parsed.keyPoints || [],
+    references: mergedRefs,
+    shortsTopics: fallbackTopics,
+    disclaimer:
+      parsed.disclaimer?.trim() ||
+      "본 내용은 일반 정보이며 수의사 대면 진료·처방을 대체하지 않습니다.",
+  };
+}
+
 /** @deprecated use formatVertexError */
 export const formatGeminiError = formatVertexError;

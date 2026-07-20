@@ -9,6 +9,7 @@ const links = [
   { href: "/", label: "홈" },
   { href: "/channels", label: "채널" },
   { href: "/summarize", label: "요약" },
+  { href: "/expert", label: "전문 답변" },
 ];
 
 export function Nav() {
