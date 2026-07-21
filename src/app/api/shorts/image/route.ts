@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { formatVertexError } from "@/lib/ai";
 import { generateImagenImage } from "@/lib/imagen";
 import { getVertexCredentials } from "@/lib/request-keys";
 import type { ImageStyleId } from "@/lib/shorts";
@@ -8,6 +7,7 @@ import { IMAGE_STYLE_OPTIONS } from "@/lib/shorts";
 function statusFromMessage(message: string) {
   if (/서비스 계정|프로젝트 ID|인증/i.test(message)) return 401;
   if (/한도|quota|429/i.test(message)) return 429;
+  if (/비어|차단|프롬프트/i.test(message)) return 422;
   return 500;
 }
 
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
       dataUrl: `data:${image.mimeType};base64,${image.base64}`,
     });
   } catch (error) {
-    const message = formatVertexError(error);
+    const message = error instanceof Error ? error.message : "이미지 생성에 실패했습니다.";
     return NextResponse.json({ error: message }, { status: statusFromMessage(message) });
   }
 }

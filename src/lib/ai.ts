@@ -28,9 +28,12 @@ let accessCache: AccessCache | null = null;
 
 function extractJsonText(raw: string): string {
   const cleaned = raw
+    .replace(/^\uFEFF/, "")
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/i, "")
+    // Strip ASCII control chars except tab/newline/carriage return
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
     .trim();
 
   const start = cleaned.indexOf("{");
@@ -43,7 +46,23 @@ function extractJsonText(raw: string): string {
 
 function repairJsonText(text: string): string {
   // Remove trailing commas before } or ]
-  return text.replace(/,\s*([}\]])/g, "$1");
+  let repaired = text.replace(/,\s*([}\]])/g, "$1");
+  // Close truncated string + object if response cut mid-string (best-effort)
+  const quoteCount = (repaired.match(/"/g) || []).length;
+  if (quoteCount % 2 === 1) {
+    repaired += '"';
+  }
+  const openBraces = (repaired.match(/\{/g) || []).length;
+  const closeBraces = (repaired.match(/\}/g) || []).length;
+  if (openBraces > closeBraces) {
+    repaired += "}".repeat(openBraces - closeBraces);
+  }
+  const openBrackets = (repaired.match(/\[/g) || []).length;
+  const closeBrackets = (repaired.match(/\]/g) || []).length;
+  if (openBrackets > closeBrackets) {
+    repaired += "]".repeat(openBrackets - closeBrackets);
+  }
+  return repaired.replace(/,\s*([}\]])/g, "$1");
 }
 
 function parseJson<T>(raw: string): T {
@@ -1103,11 +1122,11 @@ ${question.slice(0, 2000)}`;
     throw new Error(formatVertexError(lastError));
   }
 
-  const structurePrompt = `아래 수의학 전문 답변을 JSON으로만 재구성하세요.
+  const structurePrompt = `아래 수의학 전문 답변을 짧은 JSON으로만 재구성하세요. 반드시 완전한 JSON 한 개만 출력.
 형식:
 {
   "title":"짧은 제목",
-  "answer":"보호자에게 보여줄 자세한 본문(문단)",
+  "answer":"보호자용 본문(너무 길면 핵심만 800자 이내)",
   "keyPoints":["핵심1","핵심2","핵심3","핵심4","핵심5"],
   "references":[{"title":"출처명","url":"https://..."}],
   "shortsTopics":[
@@ -1116,33 +1135,41 @@ ${question.slice(0, 2000)}`;
   "disclaimer":"수의사 대면 진료를 대체하지 않는다는 한 줄 고지"
 }
 규칙:
-- answer는 원문 내용을 충실히 유지(한국어)
-- references는 원문에 나온 URL/출처 + 제공된 검색 출처를 합쳐 최대 8개. url이 없으면 공식 사이트를 추정하지 말고 title만 두고 url은 빈 문자열
-- shortsTopics 3~5개 (이 답변으로 만들 숏츠 각도)
-- 이모지 금지, JSON 완전하게
+- answer는 한국어, 800자 이내 권장(잘림 금지)
+- references는 원문·검색 출처 합쳐 최대 6개. url 없으면 title만, url은 ""
+- shortsTopics 3개
+- 이모지 금지, 코드펜스 금지, JSON만
 
 검색/그라운딩 출처:
 ${groundingRefs.map((r) => `- ${r.title}: ${r.url}`).join("\n") || "(없음)"}
 
 원문 답변:
-${groundedText.slice(0, 6000)}`;
+${groundedText.slice(0, 4500)}`;
 
-  const structuredRaw = await generateJson({
-    credentials: params.credentials,
-    temperature: 0.2,
-    prompt: structurePrompt,
-    maxOutputTokens: 4096,
-  });
-  const parsed = parseJson<{
+  type StructuredExpert = {
     title?: string;
     answer?: string;
     keyPoints?: string[];
     references?: Array<{ title?: string; url?: string }>;
     shortsTopics?: unknown;
     disclaimer?: string;
-  }>(structuredRaw);
+  };
 
-  const modelRefs = Array.isArray(parsed.references)
+  let parsed: StructuredExpert | null = null;
+  try {
+    const structuredRaw = await generateJson({
+      credentials: params.credentials,
+      temperature: 0.1,
+      prompt: structurePrompt,
+      maxOutputTokens: 6144,
+    });
+    parsed = parseJson<StructuredExpert>(structuredRaw);
+  } catch {
+    // JSON 재구성 실패 시에도 1차 전문 답변(groundedText)은 보여 준다
+    parsed = null;
+  }
+
+  const modelRefs = Array.isArray(parsed?.references)
     ? parsed.references
         .map((r) => ({
           title: r?.title?.trim() || "",
@@ -1159,25 +1186,40 @@ ${groundedText.slice(0, 6000)}`;
     })
     .slice(0, 10);
 
-  const topics = normalizeTopics(parsed.shortsTopics);
-  const fallbackTopics =
-    topics.length > 0
-      ? topics
-      : await suggestShortsTopics({
-          title: parsed.title || "전문 답변",
-          summary: parsed.answer || groundedText,
-          keyPoints: parsed.keyPoints || [],
-          credentials: params.credentials,
-        });
+  const title = parsed?.title?.trim() || "전문 답변";
+  const answer = parsed?.answer?.trim() || groundedText.trim();
+  const keyPoints = Array.isArray(parsed?.keyPoints)
+    ? parsed.keyPoints.filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+    : [];
+
+  let topics = normalizeTopics(parsed?.shortsTopics);
+  if (topics.length === 0) {
+    try {
+      topics = await suggestShortsTopics({
+        title,
+        summary: answer.slice(0, 2500),
+        keyPoints,
+        credentials: params.credentials,
+      });
+    } catch {
+      topics = [
+        {
+          id: "t1",
+          title: `${title} — 보호자가 알아야 할 점`,
+          angle: "전문 답변의 핵심을 숏츠로 요약",
+        },
+      ];
+    }
+  }
 
   return {
-    title: parsed.title?.trim() || "전문 답변",
-    answer: parsed.answer?.trim() || groundedText.trim(),
-    keyPoints: parsed.keyPoints || [],
+    title,
+    answer,
+    keyPoints,
     references: mergedRefs,
-    shortsTopics: fallbackTopics,
+    shortsTopics: topics,
     disclaimer:
-      parsed.disclaimer?.trim() ||
+      parsed?.disclaimer?.trim() ||
       "본 내용은 일반 정보이며 수의사 대면 진료·처방을 대체하지 않습니다.",
   };
 }

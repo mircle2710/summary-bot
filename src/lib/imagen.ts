@@ -32,21 +32,28 @@ async function getAccessToken(serviceAccountJson: string): Promise<string> {
   return token;
 }
 
+type GeminiImagePart = {
+  text?: string;
+  inlineData?: { mimeType?: string; data?: string };
+  inline_data?: { mime_type?: string; mimeType?: string; data?: string };
+};
+
 type GeminiImageResponse = {
   candidates?: Array<{
     content?: {
-      parts?: Array<{
-        text?: string;
-        inlineData?: { mimeType?: string; data?: string };
-      }>;
+      parts?: GeminiImagePart[];
     };
+    finishReason?: string;
+    finishMessage?: string;
   }>;
+  promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
   error?: { message?: string; status?: string; code?: number };
 };
 
 const IMAGE_MODELS = [
   process.env.VERTEX_IMAGEN_MODEL,
   "gemini-2.5-flash-image",
+  "gemini-2.0-flash-preview-image-generation",
   "gemini-3.1-flash-image",
   "gemini-3-pro-image",
 ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
@@ -59,7 +66,96 @@ function formatImageError(error: unknown): string {
   if (/PERMISSION_DENIED|403/i.test(message)) {
     return "이미지 생성 권한이 없습니다. 서비스 계정에 Vertex AI User 역할이 있는지 확인해 주세요.";
   }
+  if (/SAFETY|blocked|blockReason|IMAGE_EMPTY/i.test(message)) {
+    return "이미지 생성 결과가 비어 있거나 차단되었습니다. 장면 지시사항을 조금 바꿔 다시 시도해 주세요.";
+  }
   return formatVertexError(error);
+}
+
+function extractImageFromParts(
+  parts: GeminiImagePart[],
+): { mimeType: string; base64: string } | null {
+  for (const part of parts) {
+    const inline = part.inlineData || part.inline_data;
+    const data = inline?.data?.trim();
+    if (!data) continue;
+    const mimeType =
+      inline?.mimeType ||
+      ("mime_type" in (inline || {}) ? (inline as { mime_type?: string }).mime_type : undefined) ||
+      "image/png";
+    return { mimeType, base64: data };
+  }
+  return null;
+}
+
+async function requestImageOnce(params: {
+  token: string;
+  projectId: string;
+  location: string;
+  model: string;
+  prompt: string;
+  aspectRatio: string;
+  modalities: Array<"TEXT" | "IMAGE">;
+}): Promise<{ mimeType: string; base64: string }> {
+  const url = `https://${params.location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(params.projectId)}/locations/${encodeURIComponent(params.location)}/publishers/google/models/${encodeURIComponent(params.model)}:generateContent`;
+
+  const generationConfig: Record<string, unknown> = {
+    responseModalities: params.modalities,
+  };
+  // imageConfig is only valid when IMAGE is requested
+  if (params.modalities.includes("IMAGE")) {
+    generationConfig.imageConfig = {
+      aspectRatio: params.aspectRatio,
+    };
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: params.prompt }],
+        },
+      ],
+      generationConfig,
+    }),
+  });
+
+  const data = (await res.json()) as GeminiImageResponse;
+  if (!res.ok || data.error) {
+    throw new Error(data.error?.message || `HTTP ${res.status}`);
+  }
+
+  const blockReason =
+    data.promptFeedback?.blockReason ||
+    data.promptFeedback?.blockReasonMessage ||
+    data.candidates?.[0]?.finishReason ||
+    "";
+  if (/SAFETY|BLOCK|OTHER/i.test(blockReason) && !data.candidates?.[0]?.content?.parts?.length) {
+    throw new Error(`IMAGE_EMPTY: blocked (${blockReason})`);
+  }
+
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const image = extractImageFromParts(parts);
+  if (!image) {
+    const textHint = parts
+      .map((p) => p.text || "")
+      .join(" ")
+      .trim()
+      .slice(0, 180);
+    throw new Error(
+      textHint
+        ? `IMAGE_EMPTY: ${textHint}`
+        : "IMAGE_EMPTY: 이미지 데이터가 비어 있습니다.",
+    );
+  }
+  return image;
 }
 
 export async function generateImagenImage(params: {
@@ -78,60 +174,47 @@ export async function generateImagenImage(params: {
     typeof params.seed === "number"
       ? `${prompt}\nVariation seed: ${params.seed}. Create a fresh composition.`
       : prompt;
+  const aspectRatio = params.aspectRatio || "9:16";
+  const modalitySets: Array<Array<"TEXT" | "IMAGE">> = [
+    ["IMAGE"],
+    ["TEXT", "IMAGE"],
+  ];
 
   for (const model of IMAGE_MODELS) {
-    try {
-      const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:generateContent`;
-
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        cache: "no-store",
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: finalPrompt }],
-            },
-          ],
-          generationConfig: {
-            responseModalities: ["TEXT", "IMAGE"],
-            imageConfig: {
-              aspectRatio: params.aspectRatio || "9:16",
-            },
-          },
-        }),
-      });
-
-      const data = (await res.json()) as GeminiImageResponse;
-      if (!res.ok || data.error) {
-        throw new Error(data.error?.message || `HTTP ${res.status}`);
-      }
-
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      const imagePart = parts.find((part) => part.inlineData?.data);
-      if (!imagePart?.inlineData?.data) {
-        throw new Error("이미지 데이터가 비어 있습니다. 다른 프롬프트로 다시 시도해 주세요.");
-      }
-
-      return {
-        mimeType: imagePart.inlineData.mimeType || "image/png",
-        base64: imagePart.inlineData.data,
-      };
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
-        throw new Error(formatImageError(error));
-      }
-      if (!/404|NOT_FOUND|was not found|is not supported|not found/i.test(message)) {
+    for (const modalities of modalitySets) {
+      try {
+        return await requestImageOnce({
+          token,
+          projectId,
+          location,
+          model,
+          prompt: finalPrompt,
+          aspectRatio,
+          modalities,
+        });
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+          throw new Error(formatImageError(error));
+        }
+        // Empty image / unsupported modality / missing model → try next combo
+        if (
+          /IMAGE_EMPTY|404|NOT_FOUND|was not found|is not supported|not found|INVALID_ARGUMENT|imageConfig|responseModalities/i.test(
+            message,
+          )
+        ) {
+          continue;
+        }
         throw new Error(formatImageError(error));
       }
     }
   }
 
-  throw new Error(formatImageError(lastError));
+  throw new Error(
+    formatImageError(
+      lastError ||
+        new Error("이미지 데이터가 비어 있습니다. 다른 프롬프트로 다시 시도해 주세요."),
+    ),
+  );
 }
