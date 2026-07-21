@@ -37,7 +37,7 @@ export default function ExpertPage() {
     if (result.references?.length) {
       lines.push("", "참고 자료");
       for (const ref of result.references) {
-        lines.push(`- ${ref.title}${ref.url ? ` (${ref.url})` : ""}`);
+        if (ref.url) lines.push(`- ${ref.title || ref.url}: ${ref.url}`);
       }
     }
     if (result.disclaimer) {
@@ -185,19 +185,29 @@ export default function ExpertPage() {
               <>
                 <h4 style={{ margin: "1.25rem 0 0.4rem" }}>참고 자료 (근거 URL)</h4>
                 <ul className="ref-list">
-                  {result.references.map((ref: ExpertReference) => (
-                    <li key={`${ref.title}-${ref.url}`}>
-                      {ref.url ? (
+                  {result.references
+                    .filter((ref) => Boolean(ref.url?.trim()))
+                    .map((ref: ExpertReference) => (
+                      <li key={`${ref.title}-${ref.url}`}>
                         <a href={ref.url} target="_blank" rel="noreferrer">
                           {ref.title || ref.url}
                         </a>
-                      ) : (
-                        <span>{ref.title}</span>
-                      )}
-                    </li>
-                  ))}
+                        <div className="ref-url">
+                          <a href={ref.url} target="_blank" rel="noreferrer">
+                            {ref.url}
+                          </a>
+                          <CopyButton text={ref.url} label="URL" />
+                        </div>
+                      </li>
+                    ))}
                 </ul>
               </>
+            )}
+            {result.references?.length === 0 && (
+              <div className="notice-box" style={{ marginTop: "1rem" }}>
+                이번 답변에는 확인 가능한 출처 URL을 붙이지 못했습니다. 질문을 조금 바꿔
+                다시 받아 보시면 검색 근거가 붙을 수 있습니다.
+              </div>
             )}
           </div>
 

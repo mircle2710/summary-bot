@@ -930,6 +930,7 @@ ${params.transcript ? `참고:\n${params.transcript.slice(0, 3000)}` : ""}`;
 
 type GroundingChunk = {
   web?: { uri?: string; title?: string };
+  retrievedContext?: { uri?: string; title?: string };
 };
 
 type GroundedVertexResponse = {
@@ -937,29 +938,234 @@ type GroundedVertexResponse = {
     content?: { parts?: Array<{ text?: string }> };
     groundingMetadata?: {
       groundingChunks?: GroundingChunk[];
+      groundingSupports?: Array<{
+        groundingChunkIndices?: number[];
+        segment?: { text?: string };
+      }>;
       webSearchQueries?: string[];
+      searchEntryPoint?: { renderedContent?: string };
+    };
+    citationMetadata?: {
+      citations?: Array<{ uri?: string; title?: string; startIndex?: number; endIndex?: number }>;
     };
     finishReason?: string;
   }>;
   error?: { message?: string };
 };
 
-function extractGroundingReferences(
-  chunks: GroundingChunk[] | undefined,
-): Array<{ title: string; url: string }> {
-  if (!chunks?.length) return [];
+function isHttpUrl(value: string | undefined | null): value is string {
+  if (!value?.trim()) return false;
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeHttpUrl(value: string): string {
+  const trimmed = value.trim().replace(/[),.;\]}>]+$/g, "");
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function extractUrlsFromText(text: string): string[] {
+  if (!text) return [];
+  const matches = text.match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
   const seen = new Set<string>();
-  const refs: Array<{ title: string; url: string }> = [];
-  for (const chunk of chunks) {
-    const url = chunk.web?.uri?.trim();
+  const urls: string[] = [];
+  for (const match of matches) {
+    const url = normalizeHttpUrl(match);
     if (!url || seen.has(url)) continue;
     seen.add(url);
+    urls.push(url);
+  }
+  return urls;
+}
+
+function extractGroundingReferences(candidate: {
+  groundingMetadata?: {
+    groundingChunks?: GroundingChunk[];
+    searchEntryPoint?: { renderedContent?: string };
+  };
+  citationMetadata?: {
+    citations?: Array<{ uri?: string; title?: string }>;
+  };
+} | undefined): Array<{ title: string; url: string }> {
+  if (!candidate) return [];
+  const seen = new Set<string>();
+  const refs: Array<{ title: string; url: string }> = [];
+
+  const push = (title: string | undefined, uri: string | undefined) => {
+    const url = uri ? normalizeHttpUrl(uri) : "";
+    if (!url || seen.has(url)) return;
+    seen.add(url);
     refs.push({
-      title: chunk.web?.title?.trim() || url,
+      title: (title || "").trim() || url,
       url,
     });
+  };
+
+  for (const chunk of candidate.groundingMetadata?.groundingChunks || []) {
+    push(chunk.web?.title, chunk.web?.uri);
+    push(chunk.retrievedContext?.title, chunk.retrievedContext?.uri);
   }
-  return refs.slice(0, 12);
+
+  for (const citation of candidate.citationMetadata?.citations || []) {
+    push(citation.title, citation.uri);
+  }
+
+  for (const url of extractUrlsFromText(
+    candidate.groundingMetadata?.searchEntryPoint?.renderedContent || "",
+  )) {
+    push(undefined, url);
+  }
+
+  return refs.slice(0, 16);
+}
+
+function titleTokens(title: string): string[] {
+  return title
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+}
+
+function titlesLikelyMatch(a: string, b: string): boolean {
+  const ta = titleTokens(a);
+  const tb = titleTokens(b);
+  if (!ta.length || !tb.length) return false;
+  const setB = new Set(tb);
+  const overlap = ta.filter((t) => setB.has(t)).length;
+  return overlap >= Math.min(2, ta.length, tb.length);
+}
+
+function mergeExpertReferences(params: {
+  groundingRefs: Array<{ title: string; url: string }>;
+  modelRefs: Array<{ title: string; url: string }>;
+  answerText: string;
+}): Array<{ title: string; url: string }> {
+  const fromText = extractUrlsFromText(params.answerText).map((url) => ({
+    title: url,
+    url,
+  }));
+
+  const pool = [...params.groundingRefs, ...fromText].filter((r) => isHttpUrl(r.url));
+  const byUrl = new Map<string, { title: string; url: string }>();
+  for (const ref of pool) {
+    const url = normalizeHttpUrl(ref.url);
+    if (!url) continue;
+    const prev = byUrl.get(url);
+    const title = ref.title.trim() && ref.title !== url ? ref.title.trim() : prev?.title || url;
+    byUrl.set(url, { title: title === url ? hostnameAsTitle(url) : title, url });
+  }
+
+  for (const ref of params.modelRefs) {
+    const url = normalizeHttpUrl(ref.url);
+    const title = ref.title.trim();
+    if (url) {
+      const prev = byUrl.get(url);
+      byUrl.set(url, {
+        url,
+        title:
+          (title && title !== url ? title : prev?.title) ||
+          hostnameAsTitle(url),
+      });
+      continue;
+    }
+    if (!title) continue;
+    // title-only: attach a grounding/text URL with similar title if possible
+    const matched = [...byUrl.values()].find(
+      (r) => titlesLikelyMatch(title, r.title) || titlesLikelyMatch(title, r.url),
+    );
+    if (matched) {
+      byUrl.set(matched.url, {
+        url: matched.url,
+        title: title.length > matched.title.length ? title : matched.title,
+      });
+    }
+  }
+
+  // Prefer named sources first, then leftover URL-only ones
+  const named = [...byUrl.values()].filter((r) => r.title !== r.url && r.title !== hostnameAsTitle(r.url));
+  const rest = [...byUrl.values()].filter((r) => !named.some((n) => n.url === r.url));
+  return [...named, ...rest].slice(0, 12);
+}
+
+function hostnameAsTitle(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+async function fillMissingReferenceUrls(params: {
+  credentials: VertexCredentials;
+  refs: Array<{ title: string; url: string }>;
+  question: string;
+  answer: string;
+}): Promise<Array<{ title: string; url: string }>> {
+  const missing = params.refs.filter((r) => r.title && !isHttpUrl(r.url));
+  const withUrls = params.refs.filter((r) => isHttpUrl(r.url));
+  if (missing.length === 0) return withUrls;
+
+  const prompt = `수의학 참고 출처에 공식/검증 가능한 https URL을 붙이세요. JSON만 반환.
+형식: {"references":[{"title":"출처명","url":"https://..."}]}
+규칙:
+- 아래 title마다 반드시 실제 https URL 1개
+- 추측이 불가하면 해당 기관/저널/대학의 공식 홈페이지 URL을 사용
+- 빈 url 금지, 가짜 DOI/가짜 도메인 금지
+- 최대 ${Math.min(missing.length, 8)}개
+
+질문: ${params.question.slice(0, 400)}
+답변 요약: ${params.answer.slice(0, 800)}
+title 목록:
+${missing.map((r) => `- ${r.title}`).join("\n")}`;
+
+  try {
+    const raw = await generateJson({
+      credentials: params.credentials,
+      temperature: 0,
+      prompt,
+      maxOutputTokens: 2048,
+    });
+    const parsed = parseJson<{ references?: Array<{ title?: string; url?: string }> }>(raw);
+    const filled = Array.isArray(parsed.references) ? parsed.references : [];
+    const byTitle = new Map<string, string>();
+    for (const item of filled) {
+      const title = item.title?.trim() || "";
+      const url = normalizeHttpUrl(item.url || "");
+      if (!title || !url) continue;
+      byTitle.set(title.toLowerCase(), url);
+    }
+
+    const recovered: Array<{ title: string; url: string }> = [];
+    for (const ref of missing) {
+      const direct = byTitle.get(ref.title.toLowerCase());
+      if (direct) {
+        recovered.push({ title: ref.title, url: direct });
+        continue;
+      }
+      const fuzzy = [...byTitle.entries()].find(([t]) => titlesLikelyMatch(ref.title, t));
+      if (fuzzy) recovered.push({ title: ref.title, url: fuzzy[1] });
+    }
+
+    return mergeExpertReferences({
+      groundingRefs: withUrls,
+      modelRefs: recovered,
+      answerText: "",
+    });
+  } catch {
+    return withUrls;
+  }
 }
 
 export async function answerVeterinaryExpert(params: {
@@ -995,7 +1201,8 @@ export async function answerVeterinaryExpert(params: {
 2) 진단/처방처럼 단정하지 말고, 가능한 소견과 추가 확인이 필요한 점을 구분.
 3) 응급 가능성이 있으면 즉시 동물병원 방문을 권고.
 4) Google 검색 결과를 활용해 근거를 찾고, 답변에 핵심을 정리.
-5) 이모지 금지.
+5) 답변 본문 또는 말미에 참고한 웹 출처의 전체 https URL을 가능한 한 모두 명시.
+6) 이모지 금지.
 
 보호자 질문:
 ${question.slice(0, 2000)}`;
@@ -1046,9 +1253,7 @@ ${question.slice(0, 2000)}`;
       if (!groundedText.trim()) {
         throw new Error("전문 답변 응답이 비어 있습니다.");
       }
-      groundingRefs = extractGroundingReferences(
-        data.candidates?.[0]?.groundingMetadata?.groundingChunks,
-      );
+      groundingRefs = extractGroundingReferences(data.candidates?.[0]);
       lastError = null;
       break;
     } catch (error) {
@@ -1084,7 +1289,7 @@ ${question.slice(0, 2000)}`;
                   {
                     text: `${prompt}
 
-추가: 검색 도구를 쓸 수 없으니, 알고 있는 공신력 있는 수의학 출처(학회/대학/논문명)를 명시하고, 가능하면 공식 URL도 함께 제안하세요.`,
+추가: 검색 도구를 쓸 수 없으니, 알고 있는 공신력 있는 수의학 출처(학회/대학/논문명)와 함께 각 출처의 공식 https URL을 반드시 본문에 포함하세요.`,
                   },
                   {
                     inlineData: {
@@ -1109,6 +1314,7 @@ ${question.slice(0, 2000)}`;
           data.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") ||
           "";
         if (groundedText.trim()) {
+          groundingRefs = extractGroundingReferences(data.candidates?.[0]);
           lastError = null;
           break;
         }
@@ -1136,7 +1342,9 @@ ${question.slice(0, 2000)}`;
 }
 규칙:
 - answer는 한국어, 800자 이내 권장(잘림 금지)
-- references는 원문·검색 출처 합쳐 최대 6개. url 없으면 title만, url은 ""
+- references는 검증용. 각 항목에 title과 실제 https URL을 모두 넣을 것(빈 url 금지)
+- 아래 "검색/그라운딩 출처"에 있는 URL은 빠짐없이 references에 포함
+- 원문 답변에 나온 https URL도 references에 포함
 - shortsTopics 3개
 - 이모지 금지, 코드펜스 금지, JSON만
 
@@ -1178,19 +1386,42 @@ ${groundedText.slice(0, 4500)}`;
         .filter((r) => r.title || r.url)
     : [];
 
-  const mergedRefs = [...groundingRefs, ...modelRefs]
-    .filter((r) => r.url || r.title)
-    .filter((r, i, arr) => {
-      const key = r.url || r.title;
-      return arr.findIndex((x) => (x.url || x.title) === key) === i;
-    })
-    .slice(0, 10);
-
   const title = parsed?.title?.trim() || "전문 답변";
   const answer = parsed?.answer?.trim() || groundedText.trim();
   const keyPoints = Array.isArray(parsed?.keyPoints)
     ? parsed.keyPoints.filter((p): p is string => typeof p === "string" && p.trim().length > 0)
     : [];
+
+  let mergedRefs = mergeExpertReferences({
+    groundingRefs,
+    modelRefs,
+    answerText: `${groundedText}\n${answer}`,
+  });
+
+  // title만 있고 URL이 없는 항목은 한 번 더 URL을 채운 뒤, URL 있는 출처만 남긴다
+  const titleOnly = modelRefs.filter((r) => r.title && !isHttpUrl(r.url));
+  if (titleOnly.length > 0 || mergedRefs.length === 0) {
+    mergedRefs = await fillMissingReferenceUrls({
+      credentials: params.credentials,
+      refs: [
+        ...mergedRefs,
+        ...titleOnly.filter(
+          (r) => !mergedRefs.some((m) => titlesLikelyMatch(m.title, r.title)),
+        ),
+      ],
+      question,
+      answer,
+    });
+  }
+
+  mergedRefs = mergedRefs
+    .map((r) => ({
+      title: r.title.trim() || hostnameAsTitle(r.url),
+      url: normalizeHttpUrl(r.url),
+    }))
+    .filter((r) => isHttpUrl(r.url))
+    .filter((r, i, arr) => arr.findIndex((x) => x.url === r.url) === i)
+    .slice(0, 12);
 
   let topics = normalizeTopics(parsed?.shortsTopics);
   if (topics.length === 0) {
