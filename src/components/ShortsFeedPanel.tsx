@@ -13,6 +13,7 @@ import {
   IMAGE_DENSITY_OPTIONS,
   IMAGE_STYLE_OPTIONS,
   SUBTITLE_FONTS,
+  subtitleVerticalPercent,
   type ImageDensity,
   type ImageStyleId,
   type ShortsScene,
@@ -58,6 +59,20 @@ function packScenesFromSentences(
   return next;
 }
 
+function captionStyle(subtitle: SubtitleOptions, previewWidth: number) {
+  const fontCss = previewFontCss(subtitle.fontFamily);
+  const previewFontPx = Math.max(
+    12,
+    Math.round(subtitle.fontSize * (previewWidth / 768)),
+  );
+  return {
+    fontFamily: fontCss,
+    fontSize: `${previewFontPx}px`,
+    top: `${subtitleVerticalPercent(subtitle)}%`,
+    transform: "translateY(-50%)",
+  } as const;
+}
+
 function ScenePreview({
   scene,
   index,
@@ -67,10 +82,6 @@ function ScenePreview({
   index: number;
   subtitle: SubtitleOptions;
 }) {
-  const fontCss = previewFontCss(subtitle.fontFamily);
-  // Preview frame is ~280px wide vs 768 canvas → scale roughly
-  const previewFontPx = Math.max(12, Math.round(subtitle.fontSize * (280 / 768)));
-
   if (scene.imageDataUrl) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
@@ -87,13 +98,7 @@ function ScenePreview({
       className="scene-black-preview"
       aria-label={`장면 ${index + 1} 검은 화면 미리보기`}
     >
-      <p
-        className={`scene-black-caption pos-${subtitle.position}`}
-        style={{
-          fontFamily: fontCss,
-          fontSize: `${previewFontPx}px`,
-        }}
-      >
+      <p className="scene-black-caption" style={captionStyle(subtitle, 280)}>
         {scene.text || "(문장을 입력해 주세요)"}
       </p>
       <span className="scene-black-badge">이미지 대기</span>
@@ -117,6 +122,7 @@ export function ShortsFeedPanel({
   const [subtitle, setSubtitle] = useState<SubtitleOptions>({
     enabled: true,
     position: "bottom",
+    offset: 0,
     fontFamily: "sans",
     fontSize: 42,
   });
@@ -126,6 +132,8 @@ export function ShortsFeedPanel({
   const [loadingScript, setLoadingScript] = useState(false);
   const [generatingAll, setGeneratingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const estimatedCount = useMemo(() => {
     const sentenceGuess = Math.max(
@@ -136,7 +144,34 @@ export function ShortsFeedPanel({
   }, [summary, keyPoints.length, density]);
 
   const selectedTopic = topics.find((t) => t.id === selectedTopicId) || null;
-  const previewFontCssValue = previewFontCss(subtitle.fontFamily);
+  const previewCaptionStyle = captionStyle(subtitle, 200);
+
+  function updateSentence(index: number, value: string) {
+    setSentences((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  }
+
+  function addSentence() {
+    setSentences((prev) => [...prev, ""]);
+  }
+
+  function removeSentence(index: number) {
+    setSentences((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function moveSentence(from: number, to: number) {
+    if (from === to || from < 0 || to < 0) return;
+    setSentences((prev) => {
+      if (from >= prev.length || to >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
+  }
 
   async function refreshTopics() {
     setLoadingTopics(true);
@@ -217,22 +252,6 @@ export function ShortsFeedPanel({
     } finally {
       setLoadingScript(false);
     }
-  }
-
-  function updateSentence(index: number, value: string) {
-    setSentences((prev) => {
-      const next = [...prev];
-      next[index] = value;
-      return next;
-    });
-  }
-
-  function addSentence() {
-    setSentences((prev) => [...prev, ""]);
-  }
-
-  function removeSentence(index: number) {
-    setSentences((prev) => prev.filter((_, i) => i !== index));
   }
 
   function applySentenceEditsToScenes() {
@@ -467,6 +486,7 @@ export function ShortsFeedPanel({
                     setSubtitle((prev) => ({
                       ...prev,
                       position: e.target.value as SubtitlePosition,
+                      offset: 0,
                     }))
                   }
                 >
@@ -507,17 +527,34 @@ export function ShortsFeedPanel({
                   }
                 />
               </label>
+              <label className="field subtitle-offset-field">
+                <span>
+                  미세 위치 조절 ({subtitle.offset > 0 ? "+" : ""}
+                  {subtitle.offset}%)
+                </span>
+                <input
+                  className="input"
+                  type="range"
+                  min={-40}
+                  max={40}
+                  step={1}
+                  value={subtitle.offset}
+                  onChange={(e) =>
+                    setSubtitle((prev) => ({
+                      ...prev,
+                      offset: Number(e.target.value),
+                    }))
+                  }
+                />
+                <span className="muted subtitle-offset-hint">
+                  왼쪽(위) ← → 오른쪽(아래). 상·중·하단 기준에서 조금씩 옮깁니다.
+                </span>
+              </label>
             </div>
             <div className="subtitle-size-preview" aria-live="polite">
-              <span className="muted">글씨 크기 미리보기</span>
+              <span className="muted">자막 위치·크기 미리보기</span>
               <div className="subtitle-size-preview-frame">
-                <p
-                  className={`scene-black-caption pos-${subtitle.position}`}
-                  style={{
-                    fontFamily: previewFontCssValue,
-                    fontSize: `${Math.max(12, Math.round(subtitle.fontSize * (200 / 768)))}px`,
-                  }}
-                >
+                <p className="scene-black-caption" style={previewCaptionStyle}>
                   샘플 자막 {subtitle.fontSize}px
                 </p>
               </div>
@@ -592,12 +629,51 @@ export function ShortsFeedPanel({
               </button>
             </div>
             <p className="muted" style={{ margin: "0.35rem 0 0.65rem" }}>
-              이미지 만들기 전에 문장을 고치고, <strong>문장 수정 반영</strong>을 누르면
-              아래 검은 화면 미리보기가 갱신됩니다.
+              왼쪽 ⋮⋮ 핸들을 드래그해 순서를 바꾸고, 문장을 고친 뒤{" "}
+              <strong>문장 수정 반영</strong>을 누르면 아래 미리보기가 갱신됩니다.
             </p>
             <ol className="sentence-edit-list">
               {sentences.map((sentence, index) => (
-                <li key={`sentence-${index}`}>
+                <li
+                  key={`sentence-${index}`}
+                  className={
+                    dragOverIndex === index ? "sentence-row drag-over" : "sentence-row"
+                  }
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    if (dragOverIndex !== index) setDragOverIndex(index);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverIndex === index) setDragOverIndex(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const from =
+                      dragIndex ?? Number(e.dataTransfer.getData("text/plain"));
+                    moveSentence(from, index);
+                    setDragIndex(null);
+                    setDragOverIndex(null);
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="sentence-drag-handle"
+                    aria-label={`${index + 1}번 문장 순서 변경`}
+                    title="드래그해서 순서 변경"
+                    draggable
+                    onDragStart={(e) => {
+                      setDragIndex(index);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", String(index));
+                    }}
+                    onDragEnd={() => {
+                      setDragIndex(null);
+                      setDragOverIndex(null);
+                    }}
+                  >
+                    ⋮⋮
+                  </button>
                   <textarea
                     className="input"
                     rows={2}

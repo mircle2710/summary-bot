@@ -13,6 +13,8 @@ export type SubtitlePosition = "top" | "center" | "bottom";
 export type SubtitleOptions = {
   enabled: boolean;
   position: SubtitlePosition;
+  /** Fine vertical nudge from the base position, in % of frame height (-40 ~ 40). */
+  offset: number;
   fontFamily: string;
   fontSize: number;
 };
@@ -69,6 +71,15 @@ export const SUBTITLE_FONTS = [
   { id: "display", label: "강조체", css: "system-ui, sans-serif" },
 ];
 
+/** Vertical center of the subtitle block as % of frame height (8–92). */
+export function subtitleVerticalPercent(
+  options: Pick<SubtitleOptions, "position" | "offset">,
+): number {
+  const base =
+    options.position === "top" ? 12 : options.position === "center" ? 50 : 88;
+  const offset = Math.max(-40, Math.min(40, options.offset ?? 0));
+  return Math.max(8, Math.min(92, base + offset));
+}
 export function estimateSentenceCount(text: string): number {
   const parts = text
     .split(/(?<=[.!?。！？]|다\.|요\.|까\.|네\.|죠\.)\s+/)

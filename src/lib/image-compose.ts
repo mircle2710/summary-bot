@@ -1,5 +1,5 @@
 import type { SubtitleOptions } from "./shorts";
-import { SUBTITLE_FONTS } from "./shorts";
+import { SUBTITLE_FONTS, subtitleVerticalPercent } from "./shorts";
 
 export const SHORTS_CANVAS_WIDTH = 768;
 export const SHORTS_CANVAS_HEIGHT = 1408;
@@ -64,12 +64,11 @@ function drawSubtitle(
   const blockHeight = lines.length * lineHeight;
   const paddingY = fontSize * 0.8;
 
-  const centerY =
-    options.position === "top"
-      ? paddingY + blockHeight / 2
-      : options.position === "center"
-        ? canvasHeight / 2
-        : canvasHeight - paddingY - blockHeight / 2;
+  const percent = subtitleVerticalPercent(options);
+  let centerY = (canvasHeight * percent) / 100;
+  const minY = paddingY + blockHeight / 2;
+  const maxY = canvasHeight - paddingY - blockHeight / 2;
+  centerY = Math.max(minY, Math.min(maxY, centerY));
 
   const platePadX = fontSize * 0.6;
   const platePadY = fontSize * 0.35;
