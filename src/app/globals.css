@@ -706,27 +706,46 @@ textarea {
 
 .subtitle-controls {
   display: grid;
-  gap: 0.65rem;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem 0.85rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .subtitle-controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+.subtitle-controls > .field {
+  margin: 0;
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+}
+
+.subtitle-controls > .field > span:first-child {
+  min-height: 1.25rem;
+}
+
+.subtitle-apply-row {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.subtitle-apply-all {
+  width: fit-content;
+  max-width: 100%;
 }
 
 .subtitle-offset-field {
   grid-column: 1 / -1;
 }
 
-.subtitle-position-field {
-  display: grid;
-  gap: 0.45rem;
-  align-content: start;
-}
-
-.subtitle-apply-all {
-  width: 100%;
-}
-
 .subtitle-offset-hint {
   display: block;
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
   font-size: 0.8rem;
 }
 
@@ -881,12 +900,20 @@ textarea {
   align-items: stretch;
 }
 
-.sentence-row.is-draggable {
+.sentence-row.is-draggable .sentence-text-display {
   cursor: grab;
 }
 
-.sentence-row.is-draggable:active {
+.sentence-row.is-draggable .sentence-text-display:active {
   cursor: grabbing;
+}
+
+.sentence-row.is-draggable {
+  cursor: default;
+}
+
+.sentence-row.is-draggable:active {
+  cursor: default;
 }
 
 .sentence-row.is-dragging {
@@ -902,12 +929,18 @@ textarea {
 .sentence-text {
   resize: vertical;
   min-height: 2.8rem;
-  cursor: inherit;
 }
 
-.sentence-text:not(.is-editable) {
-  background: rgba(255, 255, 255, 0.92);
-  caret-color: transparent;
+.sentence-text-display {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(35, 52, 40, 0.12);
+  background: rgba(255, 255, 255, 0.95);
+  line-height: 1.45;
+  min-height: 2.8rem;
+  white-space: pre-wrap;
+  word-break: keep-all;
   user-select: none;
 }
 
@@ -934,6 +967,19 @@ textarea {
 
 .sentence-delete-btn {
   opacity: 0.85;
+}
+
+.scene-subtitle-controls {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) 1fr;
+  gap: 0.65rem;
+  margin: 0.65rem 0 0.35rem;
+}
+
+@media (max-width: 560px) {
+  .scene-subtitle-controls {
+    grid-template-columns: 1fr;
+  }
 }
 
 .blog-article-title {

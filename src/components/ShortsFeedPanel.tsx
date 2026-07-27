@@ -33,6 +33,7 @@ function packScenesFromSentences(
   sentences: string[],
   density: ImageDensity,
   previous: ShortsScene[],
+  defaults: Pick<SubtitleOptions, "position" | "offset">,
 ): ShortsScene[] {
   const cleaned = sentences.map((s) => s.trim()).filter(Boolean);
   const next: ShortsScene[] = [];
@@ -50,6 +51,8 @@ function packScenesFromSentences(
           ? prev.imagePrompt
           : `Vertical 9:16 scene illustrating: ${text}`,
       extraPrompt: prev?.extraPrompt || "",
+      subtitlePosition: prev?.subtitlePosition ?? defaults.position,
+      subtitleOffset: prev?.subtitleOffset ?? defaults.offset,
       imageRawDataUrl: textChanged ? null : prev?.imageRawDataUrl || null,
       imageDataUrl: textChanged ? null : prev?.imageDataUrl || null,
       generating: false,
@@ -73,6 +76,17 @@ function captionStyle(subtitle: SubtitleOptions, previewWidth: number) {
   } as const;
 }
 
+function sceneSubtitleOptions(
+  global: SubtitleOptions,
+  scene: Pick<ShortsScene, "subtitlePosition" | "subtitleOffset">,
+): SubtitleOptions {
+  return {
+    ...global,
+    position: scene.subtitlePosition,
+    offset: scene.subtitleOffset,
+  };
+}
+
 function ScenePreview({
   scene,
   index,
@@ -82,6 +96,7 @@ function ScenePreview({
   index: number;
   subtitle: SubtitleOptions;
 }) {
+  const options = sceneSubtitleOptions(subtitle, scene);
   if (scene.imageDataUrl) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
@@ -98,7 +113,7 @@ function ScenePreview({
       className="scene-black-preview"
       aria-label={`장면 ${index + 1} 검은 화면 미리보기`}
     >
-      <p className="scene-black-caption" style={captionStyle(subtitle, 280)}>
+      <p className="scene-black-caption" style={captionStyle(options, 280)}>
         {scene.text || "(문장을 입력해 주세요)"}
       </p>
       <span className="scene-black-badge">이미지 대기</span>
@@ -253,6 +268,8 @@ export function ShortsFeedPanel({
         data.scenes.map((scene) => ({
           ...scene,
           extraPrompt: "",
+          subtitlePosition: subtitle.position,
+          subtitleOffset: subtitle.offset,
           imageRawDataUrl: null,
           imageDataUrl: null,
           generating: false,
@@ -267,7 +284,10 @@ export function ShortsFeedPanel({
   }
 
   function applySentenceEditsToScenes() {
-    const next = packScenesFromSentences(sentences, density, scenes);
+    const next = packScenesFromSentences(sentences, density, scenes, {
+      position: subtitle.position,
+      offset: subtitle.offset,
+    });
     if (next.length === 0) {
       setError("최소 한 문장은 남겨 주세요.");
       return;
@@ -314,7 +334,7 @@ export function ShortsFeedPanel({
       const composed = await composeSubtitleOnImage({
         imageDataUrl: data.dataUrl,
         text: scene.text,
-        options: subtitle,
+        options: sceneSubtitleOptions(subtitle, scene),
       });
 
       setScenes((prev) =>
@@ -325,6 +345,8 @@ export function ShortsFeedPanel({
                 text: scene.text,
                 imagePrompt: scene.imagePrompt,
                 extraPrompt: scene.extraPrompt,
+                subtitlePosition: scene.subtitlePosition,
+                subtitleOffset: scene.subtitleOffset,
                 imageRawDataUrl: data.dataUrl!,
                 imageDataUrl: composed,
                 generating: false,
@@ -348,15 +370,27 @@ export function ShortsFeedPanel({
     }
   }
 
-  async function reapplySubtitles() {
+  async function reapplySubtitles(syncFromGlobal = false) {
     setError(null);
+    const sourceScenes = syncFromGlobal
+      ? scenes.map((scene) => ({
+          ...scene,
+          subtitlePosition: subtitle.position,
+          subtitleOffset: subtitle.offset,
+        }))
+      : scenes;
+
+    if (syncFromGlobal) {
+      setScenes(sourceScenes);
+    }
+
     const next = await Promise.all(
-      scenes.map(async (scene) => {
+      sourceScenes.map(async (scene) => {
         if (!scene.imageRawDataUrl) return scene;
         const composed = await composeSubtitleOnImage({
           imageDataUrl: scene.imageRawDataUrl,
           text: scene.text,
-          options: subtitle,
+          options: sceneSubtitleOptions(subtitle, scene),
         });
         return { ...scene, imageDataUrl: composed };
       }),
@@ -364,10 +398,37 @@ export function ShortsFeedPanel({
     setScenes(next);
   }
 
+  async function updateSceneSubtitle(
+    sceneId: string,
+    patch: Partial<Pick<ShortsScene, "subtitlePosition" | "subtitleOffset">>,
+  ) {
+    const scene = scenes.find((s) => s.id === sceneId);
+    if (!scene) return;
+    const nextScene = { ...scene, ...patch };
+    setScenes((prev) => prev.map((s) => (s.id === sceneId ? nextScene : s)));
+
+    if (!nextScene.imageRawDataUrl) return;
+    try {
+      const composed = await composeSubtitleOnImage({
+        imageDataUrl: nextScene.imageRawDataUrl,
+        text: nextScene.text,
+        options: sceneSubtitleOptions(subtitle, nextScene),
+      });
+      setScenes((prev) =>
+        prev.map((s) => (s.id === sceneId ? { ...s, ...patch, imageDataUrl: composed } : s)),
+      );
+    } catch {
+      // preview-only update already applied
+    }
+  }
+
   async function generateAll() {
     setGeneratingAll(true);
     setError(null);
-    const packed = packScenesFromSentences(sentences, density, scenes);
+    const packed = packScenesFromSentences(sentences, density, scenes, {
+      position: subtitle.position,
+      offset: subtitle.offset,
+    });
     setScenes(packed.map((s) => ({ ...s, generating: false, error: null })));
     for (const scene of packed) {
       // sequential to reduce quota spikes
@@ -489,40 +550,24 @@ export function ShortsFeedPanel({
         {subtitle.enabled && (
           <>
             <div className="subtitle-controls">
-              <div className="field subtitle-position-field">
-                <label className="field" style={{ margin: 0 }}>
-                  <span>위치</span>
-                  <select
-                    className="input"
-                    value={subtitle.position}
-                    onChange={(e) =>
-                      setSubtitle((prev) => ({
-                        ...prev,
-                        position: e.target.value as SubtitlePosition,
-                        offset: 0,
-                      }))
-                    }
-                  >
-                    <option value="top">상단</option>
-                    <option value="center">중앙</option>
-                    <option value="bottom">하단</option>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="btn btn-secondary subtitle-apply-all"
-                  onClick={() => void reapplySubtitles()}
-                  disabled={
-                    !scenes.some((s) => s.imageRawDataUrl) ||
-                    scenes.some((s) => s.generating)
+              <label className="field">
+                <span>위치</span>
+                <select
+                  className="input"
+                  value={subtitle.position}
+                  onChange={(e) =>
+                    setSubtitle((prev) => ({
+                      ...prev,
+                      position: e.target.value as SubtitlePosition,
+                      offset: 0,
+                    }))
                   }
                 >
-                  전체 장면에 자막 적용
-                </button>
-                <span className="muted subtitle-offset-hint">
-                  위치·글씨체·크기·미세 조절을 모든 생성 이미지에 한 번에 반영합니다.
-                </span>
-              </div>
+                  <option value="top">상단</option>
+                  <option value="center">중앙</option>
+                  <option value="bottom">하단</option>
+                </select>
+              </label>
               <label className="field">
                 <span>글씨체</span>
                 <select
@@ -555,6 +600,23 @@ export function ShortsFeedPanel({
                   }
                 />
               </label>
+              <div className="subtitle-apply-row">
+                <button
+                  type="button"
+                  className="btn btn-secondary subtitle-apply-all"
+                  onClick={() => void reapplySubtitles(true)}
+                  disabled={
+                    !scenes.some((s) => s.imageRawDataUrl) ||
+                    scenes.some((s) => s.generating)
+                  }
+                >
+                  전체 장면에 자막 적용
+                </button>
+                <span className="muted subtitle-offset-hint">
+                  위치·글씨체·크기·미세 조절을 모든 장면(각 장면 기본값 포함)에 한 번에
+                  반영합니다.
+                </span>
+              </div>
               <label className="field subtitle-offset-field">
                 <span>
                   미세 위치 조절 ({subtitle.offset > 0 ? "+" : ""}
@@ -674,22 +736,8 @@ export function ShortsFeedPanel({
                     ]
                       .filter(Boolean)
                       .join(" ")}
-                    draggable={!isEditing}
-                    onDragStart={(e) => {
-                      if (isEditing) {
-                        e.preventDefault();
-                        return;
-                      }
-                      const target = e.target as HTMLElement;
-                      if (target.closest(".sentence-actions")) {
-                        e.preventDefault();
-                        return;
-                      }
-                      setDragIndex(index);
-                      e.dataTransfer.effectAllowed = "move";
-                      e.dataTransfer.setData("text/plain", String(index));
-                    }}
                     onDragOver={(e) => {
+                      if (editingIndex !== null) return;
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "move";
                       if (dragOverIndex !== index) setDragOverIndex(index);
@@ -710,23 +758,33 @@ export function ShortsFeedPanel({
                       setDragIndex(null);
                       setDragOverIndex(null);
                     }}
-                    onDragEnd={() => {
-                      setDragIndex(null);
-                      setDragOverIndex(null);
-                    }}
                   >
-                    <textarea
-                      id={`sentence-edit-${index}`}
-                      className={`input sentence-text${isEditing ? " is-editable" : ""}`}
-                      rows={2}
-                      value={sentence}
-                      readOnly={!isEditing}
-                      onChange={(e) => updateSentence(index, e.target.value)}
-                      onFocus={(e) => {
-                        if (!isEditing) e.currentTarget.blur();
-                      }}
-                      placeholder={`${index + 1}번 문장`}
-                    />
+                    {isEditing ? (
+                      <textarea
+                        id={`sentence-edit-${index}`}
+                        className="input sentence-text is-editable"
+                        rows={2}
+                        value={sentence}
+                        onChange={(e) => updateSentence(index, e.target.value)}
+                        placeholder={`${index + 1}번 문장`}
+                      />
+                    ) : (
+                      <div
+                        className="sentence-text-display"
+                        draggable
+                        onDragStart={(e) => {
+                          setDragIndex(index);
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", String(index));
+                        }}
+                        onDragEnd={() => {
+                          setDragIndex(null);
+                          setDragOverIndex(null);
+                        }}
+                      >
+                        {sentence || `${index + 1}번 문장`}
+                      </div>
+                    )}
                     <div className="sentence-actions">
                       <button
                         type="button"
@@ -786,6 +844,46 @@ export function ShortsFeedPanel({
                     }
                   />
                 </label>
+                {subtitle.enabled && (
+                  <div className="scene-subtitle-controls">
+                    <label className="field">
+                      <span>이 장면 자막 위치</span>
+                      <select
+                        className="input"
+                        value={scene.subtitlePosition}
+                        onChange={(e) =>
+                          void updateSceneSubtitle(scene.id, {
+                            subtitlePosition: e.target.value as SubtitlePosition,
+                            subtitleOffset: 0,
+                          })
+                        }
+                      >
+                        <option value="top">상단</option>
+                        <option value="center">중앙</option>
+                        <option value="bottom">하단</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>
+                        미세 조절 ({scene.subtitleOffset > 0 ? "+" : ""}
+                        {scene.subtitleOffset}%)
+                      </span>
+                      <input
+                        className="input"
+                        type="range"
+                        min={-40}
+                        max={40}
+                        step={1}
+                        value={scene.subtitleOffset}
+                        onChange={(e) =>
+                          void updateSceneSubtitle(scene.id, {
+                            subtitleOffset: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
                 <ScenePreview scene={scene} index={index} subtitle={subtitle} />
                 <label className="field">
                   <span>이 장면 추가 지시사항 (프롬프트)</span>

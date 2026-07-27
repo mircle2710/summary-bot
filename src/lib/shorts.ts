@@ -24,6 +24,9 @@ export type ShortsScene = {
   text: string;
   imagePrompt: string;
   extraPrompt: string;
+  /** Per-scene subtitle placement; falls back to global options when unset. */
+  subtitlePosition: SubtitlePosition;
+  subtitleOffset: number;
   imageRawDataUrl: string | null;
   imageDataUrl: string | null;
   generating: boolean;
