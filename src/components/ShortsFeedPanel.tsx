@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api-client";
 import {
   composeSubtitleOnImage,
@@ -134,6 +134,18 @@ export function ShortsFeedPanel({
   const [error, setError] = useState<string | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (editingIndex === null) return;
+    const el = document.getElementById(
+      `sentence-edit-${editingIndex}`,
+    ) as HTMLTextAreaElement | null;
+    if (!el) return;
+    el.focus();
+    const len = el.value.length;
+    el.setSelectionRange(len, len);
+  }, [editingIndex]);
 
   const estimatedCount = useMemo(() => {
     const sentenceGuess = Math.max(
@@ -477,24 +489,40 @@ export function ShortsFeedPanel({
         {subtitle.enabled && (
           <>
             <div className="subtitle-controls">
-              <label className="field">
-                <span>위치</span>
-                <select
-                  className="input"
-                  value={subtitle.position}
-                  onChange={(e) =>
-                    setSubtitle((prev) => ({
-                      ...prev,
-                      position: e.target.value as SubtitlePosition,
-                      offset: 0,
-                    }))
+              <div className="field subtitle-position-field">
+                <label className="field" style={{ margin: 0 }}>
+                  <span>위치</span>
+                  <select
+                    className="input"
+                    value={subtitle.position}
+                    onChange={(e) =>
+                      setSubtitle((prev) => ({
+                        ...prev,
+                        position: e.target.value as SubtitlePosition,
+                        offset: 0,
+                      }))
+                    }
+                  >
+                    <option value="top">상단</option>
+                    <option value="center">중앙</option>
+                    <option value="bottom">하단</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-secondary subtitle-apply-all"
+                  onClick={() => void reapplySubtitles()}
+                  disabled={
+                    !scenes.some((s) => s.imageRawDataUrl) ||
+                    scenes.some((s) => s.generating)
                   }
                 >
-                  <option value="top">상단</option>
-                  <option value="center">중앙</option>
-                  <option value="bottom">하단</option>
-                </select>
-              </label>
+                  전체 장면에 자막 적용
+                </button>
+                <span className="muted subtitle-offset-hint">
+                  위치·글씨체·크기·미세 조절을 모든 생성 이미지에 한 번에 반영합니다.
+                </span>
+              </div>
               <label className="field">
                 <span>글씨체</span>
                 <select
@@ -629,68 +657,104 @@ export function ShortsFeedPanel({
               </button>
             </div>
             <p className="muted" style={{ margin: "0.35rem 0 0.65rem" }}>
-              왼쪽 ⋮⋮ 핸들을 드래그해 순서를 바꾸고, 문장을 고친 뒤{" "}
-              <strong>문장 수정 반영</strong>을 누르면 아래 미리보기가 갱신됩니다.
+              문장 상자를 드래그해 순서를 바꾸고, <strong>수정</strong>을 누른 뒤에만
+              내용을 고칠 수 있습니다. 끝나면 <strong>문장 수정 반영</strong>을 누르세요.
             </p>
             <ol className="sentence-edit-list">
-              {sentences.map((sentence, index) => (
-                <li
-                  key={`sentence-${index}`}
-                  className={
-                    dragOverIndex === index ? "sentence-row drag-over" : "sentence-row"
-                  }
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "move";
-                    if (dragOverIndex !== index) setDragOverIndex(index);
-                  }}
-                  onDragLeave={() => {
-                    if (dragOverIndex === index) setDragOverIndex(null);
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const from =
-                      dragIndex ?? Number(e.dataTransfer.getData("text/plain"));
-                    moveSentence(from, index);
-                    setDragIndex(null);
-                    setDragOverIndex(null);
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="sentence-drag-handle"
-                    aria-label={`${index + 1}번 문장 순서 변경`}
-                    title="드래그해서 순서 변경"
-                    draggable
+              {sentences.map((sentence, index) => {
+                const isEditing = editingIndex === index;
+                return (
+                  <li
+                    key={`sentence-${index}`}
+                    className={[
+                      "sentence-row",
+                      dragOverIndex === index ? "drag-over" : "",
+                      isEditing ? "is-editing" : "is-draggable",
+                      dragIndex === index ? "is-dragging" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    draggable={!isEditing}
                     onDragStart={(e) => {
+                      if (isEditing) {
+                        e.preventDefault();
+                        return;
+                      }
+                      const target = e.target as HTMLElement;
+                      if (target.closest(".sentence-actions")) {
+                        e.preventDefault();
+                        return;
+                      }
                       setDragIndex(index);
                       e.dataTransfer.effectAllowed = "move";
                       e.dataTransfer.setData("text/plain", String(index));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dragOverIndex !== index) setDragOverIndex(index);
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverIndex === index) setDragOverIndex(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (editingIndex !== null) {
+                        setDragIndex(null);
+                        setDragOverIndex(null);
+                        return;
+                      }
+                      const from =
+                        dragIndex ?? Number(e.dataTransfer.getData("text/plain"));
+                      moveSentence(from, index);
+                      setDragIndex(null);
+                      setDragOverIndex(null);
                     }}
                     onDragEnd={() => {
                       setDragIndex(null);
                       setDragOverIndex(null);
                     }}
                   >
-                    ⋮⋮
-                  </button>
-                  <textarea
-                    className="input"
-                    rows={2}
-                    value={sentence}
-                    onChange={(e) => updateSentence(index, e.target.value)}
-                    placeholder={`${index + 1}번 문장`}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => removeSentence(index)}
-                    disabled={sentences.length <= 1}
-                  >
-                    삭제
-                  </button>
-                </li>
-              ))}
+                    <textarea
+                      id={`sentence-edit-${index}`}
+                      className={`input sentence-text${isEditing ? " is-editable" : ""}`}
+                      rows={2}
+                      value={sentence}
+                      readOnly={!isEditing}
+                      onChange={(e) => updateSentence(index, e.target.value)}
+                      onFocus={(e) => {
+                        if (!isEditing) e.currentTarget.blur();
+                      }}
+                      placeholder={`${index + 1}번 문장`}
+                    />
+                    <div className="sentence-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost sentence-action-btn"
+                        onClick={() =>
+                          setEditingIndex((prev) => (prev === index ? null : index))
+                        }
+                      >
+                        {isEditing ? "완료" : "수정"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost sentence-action-btn sentence-delete-btn"
+                        onClick={() => {
+                          if (editingIndex === index) setEditingIndex(null);
+                          else if (editingIndex !== null && editingIndex > index) {
+                            setEditingIndex(editingIndex - 1);
+                          }
+                          removeSentence(index);
+                        }}
+                        disabled={sentences.length <= 1}
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
           </div>
 

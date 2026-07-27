@@ -714,6 +714,16 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.subtitle-position-field {
+  display: grid;
+  gap: 0.45rem;
+  align-content: start;
+}
+
+.subtitle-apply-all {
+  width: 100%;
+}
+
 .subtitle-offset-hint {
   display: block;
   margin-top: 0.25rem;
@@ -866,9 +876,21 @@ textarea {
 .sentence-edit-list li,
 .sentence-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.5rem;
-  align-items: start;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
+.sentence-row.is-draggable {
+  cursor: grab;
+}
+
+.sentence-row.is-draggable:active {
+  cursor: grabbing;
+}
+
+.sentence-row.is-dragging {
+  opacity: 0.55;
 }
 
 .sentence-row.drag-over {
@@ -877,23 +899,41 @@ textarea {
   border-radius: 12px;
 }
 
-.sentence-drag-handle {
-  cursor: grab;
-  user-select: none;
-  border: 1px dashed rgba(35, 52, 40, 0.25);
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 10px;
-  min-width: 2.2rem;
-  min-height: 2.6rem;
-  padding: 0.35rem 0.2rem;
-  color: rgba(35, 52, 40, 0.55);
-  font-size: 0.95rem;
-  letter-spacing: -0.12em;
-  line-height: 1;
+.sentence-text {
+  resize: vertical;
+  min-height: 2.8rem;
+  cursor: inherit;
 }
 
-.sentence-drag-handle:active {
-  cursor: grabbing;
+.sentence-text:not(.is-editable) {
+  background: rgba(255, 255, 255, 0.92);
+  caret-color: transparent;
+  user-select: none;
+}
+
+.sentence-text.is-editable {
+  cursor: text;
+  user-select: text;
+  box-shadow: 0 0 0 2px rgba(46, 125, 70, 0.28);
+}
+
+.sentence-actions {
+  display: grid;
+  gap: 0.28rem;
+  align-content: start;
+  min-width: 3.1rem;
+}
+
+.sentence-action-btn {
+  padding: 0.28rem 0.45rem !important;
+  min-height: 0;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  border-radius: 8px;
+}
+
+.sentence-delete-btn {
+  opacity: 0.85;
 }
 
 .blog-article-title {
