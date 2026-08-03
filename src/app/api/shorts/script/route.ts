@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { buildShortsScript, formatVertexError } from "@/lib/ai";
 import { getVertexCredentials } from "@/lib/request-keys";
-import type { ImageDensity, ImageStyleId } from "@/lib/shorts";
+import {
+  IMAGE_STYLE_IDS,
+  type ImageDensity,
+  type ImageStyleId,
+} from "@/lib/shorts";
 
 function statusFromMessage(message: string) {
   if (/서비스 계정|프로젝트 ID|인증/i.test(message)) return 401;
@@ -28,9 +32,7 @@ export async function POST(request: Request) {
     const density = ([1, 2, 3] as ImageDensity[]).includes(body.density as ImageDensity)
       ? (body.density as ImageDensity)
       : 2;
-    const style = (["anime-jp", "disney", "photoreal"] as ImageStyleId[]).includes(
-      body.style as ImageStyleId,
-    )
+    const style = IMAGE_STYLE_IDS.includes(body.style as ImageStyleId)
       ? (body.style as ImageStyleId)
       : "anime-jp";
 

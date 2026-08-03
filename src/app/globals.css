@@ -634,6 +634,14 @@ textarea {
   border-color: transparent;
 }
 
+.style-tabs .btn {
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+  padding: 0.55rem 0.75rem;
+}
+
 .section-stack {
   display: grid;
   gap: 1rem;

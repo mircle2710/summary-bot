@@ -521,7 +521,7 @@ export function ShortsFeedPanel({
 
       <div className="shorts-step">
         <h4>3. 이미지 스타일</h4>
-        <div className="analysis-tabs">
+        <div className="analysis-tabs style-tabs">
           {IMAGE_STYLE_OPTIONS.map((opt) => (
             <button
               key={opt.id}
